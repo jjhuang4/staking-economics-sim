@@ -1,3 +1,6 @@
+# project specific files/folders
+/output
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
