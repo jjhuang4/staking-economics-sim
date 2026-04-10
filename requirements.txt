@@ -1,6 +1,9 @@
 numpy==2.4.2
 pandas==3.0.1
 matplotlib==3.10.8
-nashpy==0.0.43  # for light game theory
-scipy==1.17.0  # for further computational work / numerical methods
- 
+pylint==4.0.5
+
+nashpy
+scipy
+streamlit
+plotly
