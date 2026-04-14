@@ -1,0 +1,9 @@
+# Replace these placeholder values with the validator indices and pool contract
+# addresses for the Hoodi pool you want to track.
+pool_id: hoodi-pool-1
+name: Hoodi Pool 1
+fee_rate: 0.10
+slash_pass_through: 1.0
+validator_indices: [123, 456, 789]
+contract_addresses:
+  - "0x1111111111111111111111111111111111111111"

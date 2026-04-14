@@ -1,5 +1,11 @@
 # project specific files/folders
 /output
+.tmp/
+.pytest-tmp/
+.pytest-cache/
+pytest-cache-files-*/
+pool_tracker.db
+shared/data/*.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

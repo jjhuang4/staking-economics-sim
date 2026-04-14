@@ -1,0 +1,38 @@
+services:
+  simulator:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    environment:
+      SIM_OUTPUT_DIR: ${SIM_OUTPUT_DIR:-/app/shared/output}
+      SIM_DATA_DIR: ${SIM_DATA_DIR:-/app/shared/data}
+      HOODI_EXECUTION_RPC_URL: ${HOODI_EXECUTION_RPC_URL:-}
+      HOODI_BEACON_API_URL: ${HOODI_BEACON_API_URL:-}
+      EXECUTION_RPC_URL: ${HOODI_EXECUTION_RPC_URL:-}
+      BEACON_API_URL: ${HOODI_BEACON_API_URL:-}
+      SIM_POOL_CONFIG_PATH: ${SIM_POOL_CONFIG_PATH:-pool_config.yaml}
+      SIM_TRACKER_DB_PATH: ${SIM_TRACKER_DB_PATH:-/app/shared/data/pool_tracker_live.db}
+      SIM_DASHBOARD_REFRESH_SECONDS: ${SIM_DASHBOARD_REFRESH_SECONDS:-30}
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["streamlit", "run", "simulator/live_dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    ports:
+      - "8501:8501"
+
+  cadlabs:
+    build:
+      context: ./cadlabs
+      dockerfile: Dockerfile
+    environment:
+      CADLABS_REPO_URL: ${CADLABS_REPO_URL:-https://github.com/CADLabs/ethereum-economic-model.git}
+      CADLABS_REPO_REF: ${CADLABS_REPO_REF:-main}
+    volumes:
+      - ./shared:/workspace/shared
+      - cadlabs_repo:/workspace/cadlabs-model
+      - cadlabs_venv:/workspace/.venv-cadlabs
+    working_dir: /workspace
+
+volumes:
+  cadlabs_repo:
+  cadlabs_venv:

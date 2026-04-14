@@ -1,0 +1,3 @@
+Simulator container started successfully.
+Dependencies are installed during image build, not at runtime.
+Streamlit dashboard modules imported successfully.

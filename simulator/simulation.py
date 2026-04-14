@@ -3,7 +3,16 @@ import random
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import pandas as pd
-from network import Network, NetworkConfig
+
+try:
+    from .network import Network, NetworkConfig
+except ImportError:
+    from network import Network, NetworkConfig
+
+
+def resolve_output_path(filename: str) -> str:
+    base_dir = os.getenv("SIM_OUTPUT_DIR", "output")
+    return os.path.join(base_dir, filename)
 
 
 class Simulation:
@@ -84,7 +93,9 @@ class Simulation:
         else:
             print("\nNo convergence detected within the simulation run.")
 
-    def plot(self, title="PoS Simulation Results", save_path="output/rewards.png"):
+    def plot(self, title="PoS Simulation Results", save_path=None):
+        if save_path is None:
+            save_path = resolve_output_path("rewards.png")
         # Make sure the output folder exists before trying to save anything.
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -150,7 +161,9 @@ def run_scenario(validators_fn, config, slots_per_epoch=32, num_epochs=50, seed=
 
 
 def compare_scenarios(scenarios: dict, slots_per_epoch=32, num_epochs=50, seed=42,
-                      save_path="output/comparison.png"):
+                      save_path=None):
+    if save_path is None:
+        save_path = resolve_output_path("comparison.png")
     # Run every scenario and put all reward curves on one plot for easy comparison.
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -165,7 +178,7 @@ def compare_scenarios(scenarios: dict, slots_per_epoch=32, num_epochs=50, seed=4
 
         for behavior, group in df.groupby("behavior"):
             avg = group.groupby("slot")["cumulative_reward"].mean()
-            axes[0].plot(avg.index, avg.values, label=f"{label} — {behavior}")
+            axes[0].plot(avg.index, avg.values, label=f"{label} - {behavior}")
 
         axes[1].plot(edf["epoch"], edf["avg_participation"], label=label)
 

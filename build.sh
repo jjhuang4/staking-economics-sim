@@ -1,13 +1,6 @@
-# Build
-docker build -t staking-sim .
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Runs and exits 0
-docker run --rm staking-sim
-
-# Plots land on the host
-docker run --rm -v $(pwd)/output:/app/output staking-sim
-ls output/
-
-# Correct user
-docker run --rm --entrypoint whoami staking-sim
-# simuser
+docker compose build
+docker compose run --rm simulator python -m simulator.test
+docker compose run --rm cadlabs python -c "import radcad, cadCAD_tools; print('cadlabs env ok')"
