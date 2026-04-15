@@ -80,7 +80,7 @@ class PoolTracker:
                     decoded_flows.append(flow)
         return decoded_flows
 
-    def sync_epoch(self, epoch: int, state_id: str | None = None) -> PoolSnapshot:
+    def _sync_epoch(self, epoch: int, state_id: str | None = None) -> PoolSnapshot:
         """Fetch, compute, persist, and return a pool snapshot for a single epoch."""
 
         validator_indices = self.registry.get_validator_indices()
@@ -91,7 +91,7 @@ class PoolTracker:
             ids=validator_indices,
         )
         for snapshot in current_validator_snapshots:
-            self.storage.upsert_validator_snapshot(snapshot)
+            self.storage.upsert_validator_snapshot(snapshot, commit=False)
 
         prior_validator_snapshots = (
             self.storage.get_validator_snapshots_for_epoch(epoch - 1, validator_indices)
@@ -107,7 +107,7 @@ class PoolTracker:
 
         flows = self.fetch_pool_flows(epoch)
         for flow in flows:
-            self.storage.upsert_pool_flow(flow)
+            self.storage.upsert_pool_flow(flow, commit=False)
 
         previous_snapshot = self.storage.get_pool_snapshot(self.pool.pool_id, epoch - 1) if epoch > 0 else None
         cumulative_before_wei = (
@@ -133,8 +133,22 @@ class PoolTracker:
             current_validator_snapshots=current_validator_snapshots,
             prior_validator_snapshots=prior_validator_snapshots,
         )
-        self.storage.upsert_pool_snapshot(pool_snapshot)
+        self.storage.upsert_pool_snapshot(pool_snapshot, commit=False)
         return pool_snapshot
+
+    def sync_epoch(
+        self,
+        epoch: int,
+        state_id: str | None = None,
+        *,
+        transactional: bool = True,
+    ) -> PoolSnapshot:
+        """Fetch, compute, persist, and return a pool snapshot for a single epoch."""
+
+        if not transactional:
+            return self._sync_epoch(epoch, state_id=state_id)
+        with self.storage.transaction():
+            return self._sync_epoch(epoch, state_id=state_id)
 
     def sync_range(self, start_epoch: int, end_epoch: int) -> list[PoolSnapshot]:
         """Sync an inclusive epoch range."""

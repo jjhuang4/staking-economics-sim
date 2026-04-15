@@ -15,8 +15,8 @@ This folder contains the custom staking simulator and analytics app for this rep
 - `validator.py` defines validator state and economics objects.
 - `behavior.py` contains validator decision logic.
 - `fetch_hoodi.py` fetches external chain data using Hoodi RPC and Beacon API endpoints.
-- `live_dashboard.py` is the localhost Streamlit frontend for live pool and validator monitoring.
-- `live_dashboard_data.py` prepares the live Hoodi snapshot, history, and recommendation data for the dashboard.
+- `live_dashboard.py` is the localhost Streamlit frontend for the top-validator activity leaderboard and aggregate PnL dashboard.
+- `live_dashboard_data.py` prepares the live Hoodi validator-flow snapshot, finalized-slot activity cache, synthetic basket history, and recommendation data for the dashboard.
 - `test.py` is a smoke test for the container.
 
 ## Notes
@@ -25,3 +25,5 @@ This folder contains the custom staking simulator and analytics app for this rep
 - It is intentionally separate from `../cadlabs`, which has its own model, dependencies, and workflow.
 - Container outputs land in `../shared/output` and `../shared/data`.
 - The dashboard is meant for read-only Hoodi analytics and stores per-epoch history in SQLite under `../shared/data` by default.
+- `behavior.py` powers the dashboard's simulated "Modeled Next Moves" cards. Those cards are local heuristics, not CADLabs outputs.
+- The default dashboard flow now prioritizes the configured Hoodi Beacon and execution endpoints and does not require BeaconCha premium entity access.

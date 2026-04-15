@@ -1,5 +1,13 @@
 # Staking Economics Workspace
 
+Sources used:
+
+https://ethereum-economic-model.cadlabs.org/experiments/notebooks/2_validator_revenue_and_profit_yields.html
+
+https://ethereum-economic-model.cadlabs.org/ASSUMPTIONS.html
+
+https://ethereum-economic-model.cadlabs.org/docs/model_specification/mathematical_specification.html
+
 This repository is organized as two separate Docker Compose services:
 
 - `simulator/` is the modern Python environment for Hoodi analytics, plots, and custom staking-simulator logic.
@@ -76,6 +84,7 @@ Launch the live Streamlit dashboard on localhost:
 
 ```bash
 docker compose up --build simulator
+docker compose up --build simulator
 ```
 
 Then open:
@@ -119,6 +128,7 @@ cp .env.example .env
 
 - `HOODI_EXECUTION_RPC_URL` is required for the live dashboard and optional for the basic simulator smoke test.
 - `HOODI_BEACON_API_URL` is required for the live dashboard and optional for the basic simulator smoke test.
+- `BEACON_CHAIN_KEY` is now optional and only useful for any future BeaconCha experiments. The default dashboard flow no longer depends on BeaconCha premium entity endpoints.
 - `SIM_POOL_CONFIG_PATH` points the dashboard at a YAML or JSON pool definition.
 - `SIM_TRACKER_DB_PATH` controls where live per-epoch snapshots are stored.
 - `SIM_DASHBOARD_REFRESH_SECONDS` sets the default refresh interval shown in the UI.
@@ -146,17 +156,26 @@ The simulator service now includes a Streamlit webapp that layers a live UI over
 
 ### What It Shows
 
-- current Beacon head or finalized epoch
-- active validator count and validator status mix
-- pool NAV, net rewards, penalties, share price, and cumulative PnL
+- a front-page leaderboard of the top 100 Hoodi validators ranked by deposit plus withdrawal activity over a finalized-slot lookback window
+- aggregate NAV, rewards, penalties, fees, share price, and cumulative PnL for the current top-validator basket
 - validator balance history and per-validator epoch-over-epoch gain or loss when a prior snapshot exists
+- user-adjustable slashing controls, including observed slash pass-through and hypothetical slash-stress settings
 - modeled next actions from `simulator/behavior.py`, including `add_to_stake`, `withdraw`, `wait`, and a theoretical `nothing_at_stake_attack`
 
 ### Live Data Limits
 
-- Individual validator gain or loss is shown only as a prior-epoch balance delta inferred from standard Beacon balance reads.
-- Reward source decomposition is not shown because the dashboard sticks to standard Beacon and execution reads available from the configured provider.
+- Validator ranking uses finalized beacon-block deposits and withdrawals over the selected lookback window, so validators with no recent capital-flow activity will not appear even if they have large balances.
+- Individual validator gain or loss is still shown as a prior-epoch balance delta inferred from standard Beacon balance reads.
+- The aggregate PnL charts represent the current top-validator basket chosen from the selected activity window, not a protocol-native staking pool or long-lived fixed validator set.
+- Slashing controls include both observed chain slash handling and optional hypothetical slash stress, so scenario-adjusted charts can diverge from purely observed chain results.
 - The `nothing_at_stake_attack` row is displayed as a theoretical game-theory option only, with a slash-adjusted negative expected value and no operational guidance.
+
+### Data Provenance
+
+- `pool_tracker/accounting.py` performs the dashboard's live NAV, reward, penalty, share-price, and cumulative-PnL calculations from validator balances.
+- finalized beacon blocks provide the deposit, withdrawal, and slashing activity used to rank validators in the leaderboard.
+- `simulator/behavior.py` provides the dashboard's local mixed-strategy or game-theory action suggestions.
+- `cadlabs/` remains a separate simulator environment and is not currently powering the Streamlit dashboard UI.
 
 ## Pool Tracker
 
@@ -229,9 +248,8 @@ python -m pool_tracker.cli show-snapshot --pool-config pool_config.yaml --epoch 
 ### V1 Limitations
 
 - Hoodi only.
-- Pools, validator indices, contract addresses, and event signatures are manually configured.
-- No auto-discovery of pools or validators.
-- No real-time subscriptions or dashboards.
+- Execution-layer pool flows, event specs, and contract-address discovery remain manual.
+- Validator activity ranking depends on finalized beacon blocks in the selected lookback window and can be sparse when Hoodi deposit activity is quiet.
 - Exact reward decomposition is not attempted unless a provider exposes those endpoints.
 - If execution block-range mapping is not configured, `sync_epoch()` will still work and will set execution net flows to zero.
 - Share accounting is based on manual flow inputs and validator balance aggregation, not live share token supply discovery.

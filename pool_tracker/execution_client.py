@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import time
 from typing import Any
 
 from web3 import HTTPProvider, Web3
@@ -13,7 +14,13 @@ from .models import PoolFlow
 class ExecutionClient:
     """Thin wrapper around web3.py for Hoodi execution RPC reads."""
 
+    CHAIN_ID_TTL_SECONDS = 24 * 60 * 60
+    BLOCK_NUMBER_TTL_SECONDS = 24
+    _chain_id_cache: dict[str, tuple[float, int]] = {}
+    _block_number_cache: dict[str, tuple[float, int]] = {}
+
     def __init__(self, rpc_url: str, web3_client: Web3 | None = None) -> None:
+        self.rpc_url = rpc_url
         self.web3 = web3_client or Web3(HTTPProvider(rpc_url))
 
     @staticmethod
@@ -66,12 +73,34 @@ class ExecutionClient:
     def get_latest_block_number(self) -> int:
         """Return the latest execution block number."""
 
-        return int(self.web3.eth.block_number)
+        cached_value = self._get_cached_value(self._block_number_cache, self.BLOCK_NUMBER_TTL_SECONDS)
+        if cached_value is not None:
+            return cached_value
+        try:
+            value = int(self.web3.eth.block_number)
+        except Exception:
+            fallback = self._get_cached_value(self._block_number_cache, None)
+            if fallback is not None:
+                return fallback
+            raise
+        self._block_number_cache[self.rpc_url] = (time.monotonic(), value)
+        return value
 
     def get_chain_id(self) -> int:
         """Return the current execution chain id."""
 
-        return int(self.web3.eth.chain_id)
+        cached_value = self._get_cached_value(self._chain_id_cache, self.CHAIN_ID_TTL_SECONDS)
+        if cached_value is not None:
+            return cached_value
+        try:
+            value = int(self.web3.eth.chain_id)
+        except Exception:
+            fallback = self._get_cached_value(self._chain_id_cache, None)
+            if fallback is not None:
+                return fallback
+            raise
+        self._chain_id_cache[self.rpc_url] = (time.monotonic(), value)
+        return value
 
     def get_block_timestamp(self, block_number: int) -> int:
         """Return a block timestamp as a unix epoch integer."""
@@ -125,3 +154,12 @@ class ExecutionClient:
             amount_wei=int(amount_wei),
             actor=actor,
         )
+
+    def _get_cached_value(self, cache: dict[str, tuple[float, int]], ttl_seconds: float | None) -> int | None:
+        cached = cache.get(self.rpc_url)
+        if cached is None:
+            return None
+        cached_at, value = cached
+        if ttl_seconds is None or (time.monotonic() - cached_at) <= ttl_seconds:
+            return value
+        return None

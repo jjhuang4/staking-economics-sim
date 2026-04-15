@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import requests
@@ -11,6 +12,8 @@ from .models import ValidatorSnapshot
 
 class BeaconClient:
     """Thin client around Beacon API validator endpoints."""
+
+    MAX_REQUEST_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -25,26 +28,50 @@ class BeaconClient:
         self.session = session or requests.Session()
         self.timeout = timeout
 
-    def _get(self, path: str, params: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+    def _get(
+        self,
+        path: str,
+        params: list[tuple[str, str]] | None = None,
+        *,
+        allow_404: bool = False,
+    ) -> dict[str, Any] | None:
         url = f"{self.base_url}{path}"
-        response = self.session.get(url, params=params, timeout=self.timeout)
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            hint = ""
-            if getattr(response, "status_code", None) == 404:
-                hint = " Verify that BEACON_API_URL points to the provider base URL before /eth/v1."
-            raise RuntimeError(f"Beacon API request failed for {url}: {exc}.{hint}".strip()) from exc
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Beacon API returned an invalid payload for {url}.")
-        return payload
+        response: Any = None
+        for attempt in range(1, self.MAX_REQUEST_ATTEMPTS + 1):
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                status_code = getattr(response, "status_code", None)
+                if allow_404 and status_code == 404:
+                    return None
+                if status_code == 429 and attempt < self.MAX_REQUEST_ATTEMPTS:
+                    retry_after = getattr(response, "headers", {}).get("Retry-After")
+                    try:
+                        delay_seconds = max(float(retry_after), 0.5) if retry_after is not None else 0.5 * (2 ** (attempt - 1))
+                    except (TypeError, ValueError):
+                        delay_seconds = 0.5 * (2 ** (attempt - 1))
+                    time.sleep(delay_seconds)
+                    continue
+
+                hint = ""
+                if status_code == 404:
+                    hint = " Verify that BEACON_API_URL points to the provider base URL before /eth/v1."
+                if status_code == 429:
+                    hint = " Provider rate limit hit. Reduce refresh pressure or wait for the local cache to warm."
+                raise RuntimeError(f"Beacon API request failed for {url}: {exc}.{hint}".strip()) from exc
+
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"Beacon API returned an invalid payload for {url}.")
+            return payload
+        raise RuntimeError(f"Beacon API request failed for {url}: exceeded retry budget.")
 
     @staticmethod
-    def _build_id_params(ids: list[int]) -> list[tuple[str, str]]:
+    def _build_id_params(ids: list[int | str]) -> list[tuple[str, str]]:
         return [("id", str(validator_id)) for validator_id in ids]
 
-    def get_validators(self, state_id: str, ids: list[int]) -> dict[int, dict[str, Any]]:
+    def get_validators(self, state_id: str, ids: list[int | str]) -> dict[int, dict[str, Any]]:
         """Fetch validator metadata and status for the provided ids."""
 
         if not ids:
@@ -98,6 +125,34 @@ class BeaconClient:
             raise RuntimeError("Beacon finality checkpoints response did not include a finalized epoch.")
         return int(epoch_value)
 
+    def resolve_state_id(self, state_id: str) -> str:
+        """Resolve historical numeric slot references to state roots for provider compatibility."""
+
+        normalized_state_id = str(state_id).strip()
+        if normalized_state_id.isdigit():
+            try:
+                header = self.get_header(block_id=normalized_state_id)
+            except RuntimeError:
+                return normalized_state_id
+            header_container = header.get("header", {})
+            message = header_container.get("message", {})
+            state_root = message.get("state_root")
+            if state_root is None:
+                raise RuntimeError(f"Beacon header response for slot {state_id} did not include a state_root.")
+            return str(state_root)
+        return normalized_state_id
+
+    def get_block(self, block_id: str | int) -> dict[str, Any] | None:
+        """Fetch a full Beacon block payload, returning None for skipped slots."""
+
+        payload = self._get(f"/eth/v2/beacon/blocks/{block_id}", allow_404=True)
+        if payload is None:
+            return None
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("Beacon block response did not include a data object.")
+        return data
+
     def get_validator_balances(self, state_id: str, ids: list[int]) -> dict[int, int]:
         """Fetch validator balances in gwei for the provided ids."""
 
@@ -122,15 +177,12 @@ class BeaconClient:
     ) -> list[ValidatorSnapshot]:
         """Build normalized validator snapshots for a given Beacon state."""
 
-        validator_data = self.get_validators(state_id, ids)
-        balance_data = self.get_validator_balances(state_id, ids)
+        resolved_state_id = self.resolve_state_id(state_id)
+        validator_data = self.get_validators(resolved_state_id, ids)
         snapshots: list[ValidatorSnapshot] = []
         for validator_index in ids:
             metadata = validator_data.get(validator_index, {})
-            balance_gwei = balance_data.get(
-                validator_index,
-                int(metadata.get("balance_gwei", 0)),
-            )
+            balance_gwei = int(metadata.get("balance_gwei", 0))
             effective_balance_gwei = int(metadata.get("effective_balance_gwei", 0))
             status = str(metadata.get("status", "unknown"))
             snapshots.append(
