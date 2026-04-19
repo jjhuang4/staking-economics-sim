@@ -21,18 +21,37 @@ services:
       - "8501:8501"
 
   cadlabs:
+    environment:
+      - BEACONCHAIN_API_KEY = ${BEACON_CHAIN_KEY}
     build:
       context: ./cadlabs
       dockerfile: Dockerfile
-    environment:
-      CADLABS_REPO_URL: ${CADLABS_REPO_URL:-https://github.com/CADLabs/ethereum-economic-model.git}
-      CADLABS_REPO_REF: ${CADLABS_REPO_REF:-main}
     volumes:
       - ./shared:/workspace/shared
-      - cadlabs_repo:/workspace/cadlabs-model
-      - cadlabs_venv:/workspace/.venv-cadlabs
-    working_dir: /workspace
+      - ./cadlabs/notebooks:/workspace/cadlabs-model/notebooks
+    ports:
+      - "9999:8888" 
+    working_dir: /workspace/cadlabs-model
+    # We removed the 'command' here and moved it to 'CMD' in the Dockerfile
+    # This ensures the container starts Jupyter correctly on any architecture.
 
-volumes:
-  cadlabs_repo:
-  cadlabs_venv:
+  # cadlabs:
+  #   build:
+  #     context: ./cadlabs
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     CADLABS_REPO_URL: ${CADLABS_REPO_URL:-https://github.com/CADLabs/ethereum-economic-model.git}
+  #     CADLABS_REPO_REF: ${CADLABS_REPO_REF:-main}
+  #   volumes:
+  #     - ./shared:/workspace/shared
+  #     - cadlabs_repo:/workspace/cadlabs-model
+  #     - cadlabs_venv:/workspace/.venv-cadlabs
+  #   working_dir: /workspace
+
+# volumes:
+#   cadlabs_repo:
+#   cadlabs_venv:
+# The Problem: 
+# If you ever wanted to change the Dockerfile or the Python version, 
+# Docker would keep using the old data inside those volumes. 
+# They "ghost" your changes and make debugging a nightmare.

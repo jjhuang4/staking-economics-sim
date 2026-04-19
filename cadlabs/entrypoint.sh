@@ -1,3 +1,5 @@
+# DEPRECATED -- do NOT use this entrypoint anymore
+
 #!/usr/bin/env bash
 set -euo pipefail
 

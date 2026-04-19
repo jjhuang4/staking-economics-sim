@@ -11,7 +11,7 @@ from statistics import mean
 from typing import Any
 
 from pool_tracker.accounting import compute_fee_gwei
-from pool_tracker.beacon_client import BeaconClient
+from api_layer.beacon import BeaconClient
 from pool_tracker.config import ConfigError, resolve_env_value
 from pool_tracker.execution_client import ExecutionClient
 from pool_tracker.models import Pool, PoolSnapshot, ValidatorActivity, ValidatorActivitySummary, ValidatorSnapshot
