@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .accounting import build_pool_snapshot
-from .beacon_client import BeaconClient
+from api_layer.beacon import BeaconClient
 from .config import Settings, load_pool_config, load_settings
 from .execution_client import ExecutionClient
 from .models import Pool, PoolFlow, PoolSnapshot
