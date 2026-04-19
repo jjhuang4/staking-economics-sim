@@ -31,4 +31,4 @@ import setup_path
 import setup_templates
 ```
 
-Which will enable you to import modules from within the ethereum-economic-model git submodule folder. Refer to this(documentation)[https://github.com/CADLabs/ethereum-economic-model/tree/main#Simulation-Experiments] to better understand where to approach.
+Which will enable you to import modules from within the ethereum-economic-model git submodule folder. Refer to this documentation[https://github.com/CADLabs/ethereum-economic-model/tree/main#Simulation-Experiments] to better understand where to approach.
