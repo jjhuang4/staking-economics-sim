@@ -1,20 +1,34 @@
 # CADLabs
 
-This folder contains the Docker setup for running the separate CADLabs Ethereum Economic Model environment.
+Dockerfile, entrypoint.sh, and test.sh are currently deprecated.
 
-## Purpose
+To setup for experimentation:
+```
+# With uv package manager
+uv venv --python 3.10 .venv
+# With base python
+python -m venv .venv
 
-- Keep the CADLabs model isolated from the custom simulator code and dependencies.
-- Clone the upstream CADLabs repository at runtime.
-- Create and reuse a dedicated virtual environment for the CADLabs install flow.
+# Windows
+.venv\Scripts\Activate 
+# Mac/Linux
+source .venv/bin/activate
 
-## Main Files
+# Setup notebook environment to requirements.txt:
+# With uv package manager
+uv pip install --upgrade pip setuptools wheel
+uv pip install -r requirements.txt
 
-- `Dockerfile` defines the standalone CADLabs service image.
-- `entrypoint.sh` clones or updates the upstream repo, manages the CADLabs virtualenv, and launches commands inside that environment.
+# With base python
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+```
 
-## Notes
+For every notebook made inside of /cadlabs/notebooks include at the top:
 
-- This folder does not contain the CADLabs model source itself; the service clones it into its mounted runtime workspace.
-- Use this service when you want the modular validator-economics model rather than the local custom simulator.
-- Shared artifacts can be exchanged through `../shared`.
+```
+import setup_path
+import setup_templates
+```
+
+Which will enable you to import modules from within the ethereum-economic-model git submodule folder. Refer to this(documentation)[https://github.com/CADLabs/ethereum-economic-model/tree/main#Simulation-Experiments] to better understand where to approach.
