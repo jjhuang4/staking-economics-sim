@@ -33,6 +33,7 @@ repo-root/
   cadlabs/
     Dockerfile
     entrypoint.sh
+    notebooks/  (for local experimentation)
 
   shared/
     output/
@@ -109,22 +110,6 @@ docker compose run --rm cadlabs
 ```
 
 You can override the upstream repo and branch through environment variables in `.env`.
-
-## Environment
-
-Copy `.env.example` to `.env` and set only the endpoints you need:
-
-```bash
-cp .env.example .env
-```
-
-- `HOODI_EXECUTION_RPC_URL` is required for the live dashboard and optional for the basic simulator smoke test.
-- `HOODI_BEACON_API_URL` is required for the live dashboard and optional for the basic simulator smoke test.
-- `BEACON_CHAIN_KEY` is now optional and only useful for any future BeaconCha experiments. The default dashboard flow no longer depends on BeaconCha premium entity endpoints.
-- `SIM_POOL_CONFIG_PATH` points the dashboard at a YAML or JSON pool definition.
-- `SIM_TRACKER_DB_PATH` controls where live per-epoch snapshots are stored.
-- `SIM_DASHBOARD_REFRESH_SECONDS` sets the default refresh interval shown in the UI.
-- `CADLABS_REPO_URL` and `CADLABS_REPO_REF` control which CADLabs model checkout the container installs.
 
 ## Compose
 
