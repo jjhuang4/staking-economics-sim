@@ -1,3 +1,5 @@
+.api.cache/
+
 # project specific files/folders
 /output
 .tmp/

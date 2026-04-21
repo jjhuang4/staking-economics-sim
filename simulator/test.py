@@ -4,6 +4,7 @@ from importlib import import_module
 if __name__ == "__main__":
     import_module("pool_tracker.accounting")
     import_module("simulator.behavior")
+    import_module("simulator.equivocation_attack")
     import_module("simulator.live_dashboard_data")
 
     output_dir = os.getenv("SIM_OUTPUT_DIR", "output")

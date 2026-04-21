@@ -3,27 +3,18 @@ pandas
 matplotlib
 pylint
 
+radcad==0.8.4
+stochastic==0.6.0
+typing_extensions==4.12.2
+diskcache==5.2.1
+python-dotenv==0.19.0
+
 nashpy
 scipy
 streamlit
-plotly
+plotly>=5.20,<6
 
 requests
 pyarrow
 PyYAML
 web3
-streamlit-autorefresh
-
-
-# numpy>=1.26,<3
-# pandas>=2.2,<3
-# matplotlib>=3.8,<4
-# pylint>=3,<4
-
-# nashpy>=0.0.41,<1
-# scipy>=1.11,<2
-# streamlit>=1.33,<2
-# plotly>=5.20,<6
-
-# requests>=2.31,<3
-# pyarrow>=15,<20

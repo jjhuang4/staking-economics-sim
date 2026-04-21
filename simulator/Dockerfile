@@ -15,15 +15,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY simulator/requirements.txt ./simulator-requirements.txt
+COPY requirements.txt ./requirements.txt
+COPY simulator/requirements.txt ./simulator/requirements.txt
+COPY ethereum-economic-model/requirements.txt ./ethereum-economic-model/requirements.txt
 RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install -r simulator-requirements.txt
+    pip install -r requirements.txt
 
 RUN mkdir -p /app/output /app/shared/output /app/shared/data && \
     chown -R simuser:simuser /app
 
 COPY simulator ./simulator
 COPY pool_tracker ./pool_tracker
+COPY ethereum-economic-model ./ethereum-economic-model
 COPY README.md pyproject.toml ./
 
 USER simuser
