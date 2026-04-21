@@ -1,10 +1,9 @@
-"""Streamlit dashboard for live Hoodi validator-flow monitoring."""
+"""Streamlit dashboard for the CADLabs-style staking economics simulator."""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 import json
-import os
 
 import pandas as pd
 import plotly.express as px
@@ -12,148 +11,154 @@ import plotly.graph_objects as go
 import streamlit as st
 
 try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st_autorefresh = None
-
-try:
     from .live_dashboard_data import (
-        DEFAULT_ACTIVITY_LOOKBACK_EPOCHS,
-        DEFAULT_HISTORY_EPOCHS,
-        DashboardRuntimeConfig,
-        LiveDashboardSnapshot,
-        fetch_live_dashboard_snapshot,
-        load_dashboard_runtime_config,
+        DashboardAssumptions,
+        SimulationDashboardSnapshot,
+        build_dashboard_snapshot,
+        default_dashboard_assumptions,
+        snapshot_to_json_payload,
     )
-    from .cadlabs_replication import (
-        CadLabsReplicationConfig,
-        CadLabsReplicationSnapshot,
-        build_cadlabs_replication,
+    from .equivocation_attack import (
+        EquivocationAttackConfig,
+        EquivocationAttackSnapshot,
+        build_equivocation_attack_snapshot,
     )
 except ImportError:
     from live_dashboard_data import (
-        DEFAULT_ACTIVITY_LOOKBACK_EPOCHS,
-        DEFAULT_HISTORY_EPOCHS,
-        DashboardRuntimeConfig,
-        LiveDashboardSnapshot,
-        fetch_live_dashboard_snapshot,
-        load_dashboard_runtime_config,
+        DashboardAssumptions,
+        SimulationDashboardSnapshot,
+        build_dashboard_snapshot,
+        default_dashboard_assumptions,
+        snapshot_to_json_payload,
     )
-    from cadlabs_replication import (
-        CadLabsReplicationConfig,
-        CadLabsReplicationSnapshot,
-        build_cadlabs_replication,
+    from equivocation_attack import (
+        EquivocationAttackConfig,
+        EquivocationAttackSnapshot,
+        build_equivocation_attack_snapshot,
     )
 
-GWEI_PER_ETH = 1_000_000_000
-ACTION_LABELS = {
-    "add_to_stake": "add_to_stake",
-    "wait": "wait",
-    "withdraw": "withdraw",
-    "nothing_at_stake_attack": "nothing-at-stake-attack",
+
+SCENARIO_COLORS = {
+    "Normal adoption": "#4db4ff",
+    "Low adoption": "#5be7c4",
+    "High adoption": "#ffbe55",
 }
-ACTION_COLORS = {
-    "add_to_stake": "#ecc170",
-    "wait": "#7ba8ff",
-    "withdraw": "#ff9f68",
-    "nothing_at_stake_attack": "#ff6b7a",
+METRIC_COLORS = {
+    "Revenue yield": "#4db4ff",
+    "Profit yield": "#ff7c6b",
+    "Spread": "#ffd166",
 }
-SERIES_COLORS = {
-    "observed_nav": "#7ba8ff",
-    "scenario_nav": "#ecc170",
-    "observed_cumulative_pnl": "#63d0c5",
-    "scenario_cumulative_pnl": "#ff9f68",
-    "observed_net_rewards": "#7dd3a8",
-    "scenario_net_rewards": "#4ad3a7",
-    "observed_penalties": "#f6a04d",
-    "scenario_penalties": "#ff6b6b",
-    "observed_fees": "#d5b77a",
-    "scenario_fees": "#ecc170",
-    "observed_share_price": "#7ba8ff",
-    "scenario_share_price": "#ecc170",
-}
-EPOCH_REGIME_COLORS = [
-    "rgba(123, 168, 255, 0.08)",
-    "rgba(236, 193, 112, 0.08)",
-    "rgba(99, 208, 197, 0.08)",
-    "rgba(255, 159, 104, 0.08)",
+ENVIRONMENT_COLORS = [
+    "#4db4ff",
+    "#5be7c4",
+    "#ffbe55",
+    "#ff7c6b",
+    "#c08bff",
+    "#7fb3ff",
+    "#8bd450",
 ]
-
-
-def gwei_to_eth(value: int | float) -> float:
-    """Convert gwei to ETH for display."""
-
-    return float(value) / GWEI_PER_ETH
+ATTACK_COLORS = {
+    "Branch A vote share": "#4db4ff",
+    "Branch B vote share": "#ffbe55",
+    "Attacker share before slashing": "#ff7c6b",
+    "Attacker share after slashing": "#5be7c4",
+    "Cumulative slashed validators": "#c08bff",
+    "Slashed this epoch": "#ffd166",
+    "Slashable attackers": "#4db4ff",
+    "Minimum slashed to restore safety": "#ff7c6b",
+}
 
 
 def render_theme() -> None:
-    """Inject dashboard styling."""
+    """Apply a black-forward simulation-lab visual style."""
 
     st.markdown(
         """
         <style>
         .stApp {
             background:
-                radial-gradient(circle at 10% 20%, rgba(255, 190, 92, 0.18), transparent 28%),
-                radial-gradient(circle at 80% 12%, rgba(71, 126, 255, 0.16), transparent 26%),
-                linear-gradient(180deg, #07111d 0%, #0c1929 48%, #132131 100%);
-            color: #f8f6f1;
+                radial-gradient(circle at top left, rgba(255, 190, 92, 0.14), transparent 26%),
+                radial-gradient(circle at top right, rgba(77, 180, 255, 0.14), transparent 24%),
+                linear-gradient(180deg, #020202 0%, #06080b 48%, #0a0d11 100%);
+            color: #f3f3f3;
         }
-        .stApp [data-testid="stAppViewContainer"] {
-            color: #f8f6f1;
+        .stSidebar {
+            background: linear-gradient(180deg, #040404 0%, #0b0f14 100%);
+        }
+        .stSidebar [data-testid="stMarkdownContainer"],
+        .stSidebar label,
+        .stSidebar div,
+        .stSidebar p,
+        .stSidebar span {
+            color: #f5f5f5;
         }
         h1, h2, h3 {
             font-family: Georgia, "Times New Roman", serif;
-            letter-spacing: 0.02em;
-            color: #fffaf0;
+            color: #faf7ef;
         }
         p, li, label, div, span {
-            color: #edf3fb;
+            color: #f0f0f0;
         }
         div[data-testid="stMetric"] {
-            background: linear-gradient(180deg, rgba(14, 24, 40, 0.95), rgba(10, 17, 29, 0.96));
-            border: 1px solid rgba(236, 193, 112, 0.18);
+            background: rgba(9, 9, 9, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.12);
             border-radius: 18px;
-            padding: 0.75rem 1rem;
-            box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+            padding: 0.85rem 1rem;
+            box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
         }
-        .action-card {
-            background: linear-gradient(145deg, rgba(14, 24, 43, 0.94), rgba(10, 18, 34, 0.96));
-            border: 1px solid rgba(236, 193, 112, 0.16);
-            border-radius: 18px;
-            padding: 1rem 1rem 0.85rem 1rem;
-            margin-bottom: 1rem;
-            box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+        div[data-testid="stMetricLabel"],
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricDelta"] {
+            color: #f8f8f8;
         }
-        .action-title {
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: 1.05rem;
-            color: #fffaf0;
-            margin-bottom: 0.35rem;
-        }
-        .risk-pill {
+        .model-chip {
             display: inline-block;
-            font-size: 0.78rem;
-            padding: 0.15rem 0.55rem;
+            padding: 0.2rem 0.6rem;
+            margin-right: 0.45rem;
+            margin-bottom: 0.45rem;
             border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(10, 10, 10, 0.82);
+            color: #f3f3f3;
+            font-size: 0.9rem;
+        }
+        .note-card {
+            background: rgba(8, 8, 8, 0.88);
+            border-left: 4px solid #c8922d;
+            border-radius: 14px;
+            padding: 0.8rem 0.95rem;
             margin-bottom: 0.65rem;
-            color: white;
+            color: #f3f3f3;
         }
-        .risk-low { background: #1f6f50; }
-        .risk-medium { background: #9b6a11; }
-        .risk-extreme { background: #8f1d1d; }
-        .muted-note {
-            color: #b9cae5;
-            font-size: 0.92rem;
+        div[data-testid="stDataFrame"] {
+            background: rgba(8, 8, 8, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 18px;
+            padding: 0.2rem;
         }
-        .pill {
-            display: inline-block;
-            padding: 0.18rem 0.55rem;
+        div[data-baseweb="tab-list"] {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 999px;
-            margin-right: 0.4rem;
-            margin-bottom: 0.4rem;
-            background: rgba(236, 193, 112, 0.14);
-            border: 1px solid rgba(236, 193, 112, 0.24);
+            padding: 0.2rem;
+        }
+        button[data-baseweb="tab"] {
+            color: #dcdcdc;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            border-radius: 999px;
+        }
+        [data-baseweb="input"] input,
+        [data-baseweb="base-input"] input,
+        textarea {
+            background: #090909 !important;
+            color: #f3f3f3 !important;
+        }
+        [data-baseweb="select"] > div {
+            background: #090909 !important;
+            color: #f3f3f3 !important;
         }
         </style>
         """,
@@ -161,937 +166,952 @@ def render_theme() -> None:
     )
 
 
-def render_sidebar() -> tuple[str, int, int, int, float, float, int, int, float, bool, str]:
-    """Collect dashboard controls from the sidebar."""
+@st.cache_data(show_spinner=False)
+def load_snapshot(config_payload: dict[str, float | int]) -> SimulationDashboardSnapshot:
+    """Cache the expensive simulation bundle between UI reruns."""
 
-    st.sidebar.header("Feed Controls")
-    refresh_default = int(os.getenv("SIM_DASHBOARD_REFRESH_SECONDS", "36"))
-    refresh_default = max(12, min(360, round(refresh_default / 12) * 12))
-    db_path = st.sidebar.text_input(
-        "SQLite path",
-        value=os.getenv(
-            "SIM_TRACKER_DB_PATH",
-            os.path.join(os.getenv("SIM_DATA_DIR", "shared/data"), "pool_tracker_live.db"),
-        ),
-        help="The dashboard caches finalized validator activity and per-epoch aggregate snapshots here.",
-    )
-    refresh_seconds = int(
-        st.sidebar.slider(
-            "Refresh interval (seconds)",
-            min_value=12,
-            max_value=360,
-            value=refresh_default,
-            step=12,
-            help="Slot cadence is 12 seconds, so refresh controls move in slot-sized increments.",
-        )
-    )
-    history_epochs = int(
-        st.sidebar.slider(
-            "Slot history window (epochs)",
-            min_value=1,
-            max_value=3,
-            value=DEFAULT_HISTORY_EPOCHS,
-            step=1,
-            help="Each epoch contributes 32 slots. A 3-epoch window shows 96 slot points.",
-        )
-    )
-    activity_lookback_epochs = int(
-        st.sidebar.slider(
-            "Activity lookback (epochs)",
-            min_value=1,
-            max_value=128,
-            value=DEFAULT_ACTIVITY_LOOKBACK_EPOCHS,
-            step=1,
-            help="Top validators are ranked by deposit plus withdrawal volume across this finalized-slot window.",
-        )
-    )
-    leaderboard_limit = int(
-        st.sidebar.slider(
-            "Leaderboard size",
-            min_value=10,
-            max_value=200,
-            value=100,
-            step=10,
-        )
-    )
-    state_id = st.sidebar.selectbox(
-        "Beacon state",
-        options=["head", "finalized"],
-        index=0,
-        help="Use head for the freshest aggregate balances or finalized for a fully checkpointed view.",
-    )
-
-    st.sidebar.header("Fees")
-    fee_rate = float(
-        st.sidebar.slider(
-            "Reward fee rate",
-            min_value=0.0,
-            max_value=0.50,
-            value=0.10,
-            step=0.01,
-            help="Applied to positive gross rewards in the synthetic validator basket.",
-        )
-    )
-
-    st.sidebar.header("Slashing")
-    slash_pass_through = float(
-        st.sidebar.slider(
-            "Observed slash pass-through",
-            min_value=0.0,
-            max_value=1.0,
-            value=1.0,
-            step=0.05,
-            help="How much of observed on-chain slashing loss should be treated as user-borne in the aggregate PnL view.",
-        )
-    )
-    modeled_slashed_validators = int(
-        st.sidebar.slider(
-            "Modeled slashed validators",
-            min_value=0,
-            max_value=10,
-            value=0,
-            step=1,
-            help="Adds a hypothetical slash stress to the aggregate portfolio on top of observed chain events.",
-        )
-    )
-    modeled_slash_fraction = float(
-        st.sidebar.slider(
-            "Modeled slash fraction",
-            min_value=0.0,
-            max_value=0.10,
-            value=0.0,
-            step=0.005,
-            help="Scenario-only slash fraction applied to the modeled slashed-validator count.",
-        )
-    )
-
-    auto_refresh = st.sidebar.toggle("Auto refresh", value=True)
-    st.sidebar.button("Refresh now", type="primary")
-    st.sidebar.caption("Local host URL: http://localhost:8501")
-    return (
-        db_path,
-        refresh_seconds,
-        history_epochs,
-        activity_lookback_epochs,
-        fee_rate,
-        slash_pass_through,
-        leaderboard_limit,
-        modeled_slashed_validators,
-        modeled_slash_fraction,
-        auto_refresh,
-        state_id,
-    )
+    return build_dashboard_snapshot(DashboardAssumptions(**config_payload))
 
 
-def build_pool_history_frame(snapshot: LiveDashboardSnapshot) -> pd.DataFrame:
-    """Convert stored pool snapshots into a chart-friendly DataFrame."""
+@st.cache_data(show_spinner=False)
+def load_equivocation_snapshot(
+    config_payload: dict[str, float | int],
+) -> EquivocationAttackSnapshot:
+    """Cache the custom equivocation-attack simulation between reruns."""
 
-    rows = []
-    for observed, adjusted in zip(snapshot.pool_history, snapshot.adjusted_pool_history):
-        rows.append(
-            {
-                "slot": observed.slot,
-                "epoch": observed.epoch,
-                "slot_in_epoch": (observed.slot or 0) % 32,
-                "observed_nav_eth": gwei_to_eth(observed.nav_gwei),
-                "scenario_nav_eth": gwei_to_eth(adjusted.nav_gwei),
-                "observed_cumulative_pnl_eth": gwei_to_eth(observed.cumulative_pnl_gwei),
-                "scenario_cumulative_pnl_eth": gwei_to_eth(adjusted.cumulative_pnl_gwei),
-                "observed_net_rewards_eth": gwei_to_eth(observed.net_rewards_gwei),
-                "scenario_net_rewards_eth": gwei_to_eth(adjusted.net_rewards_gwei),
-                "observed_penalties_eth": gwei_to_eth(observed.penalties_gwei + observed.slashing_losses_gwei),
-                "scenario_penalties_eth": gwei_to_eth(adjusted.penalties_gwei + adjusted.slashing_losses_gwei),
-                "observed_fees_eth": gwei_to_eth(observed.fees_gwei),
-                "scenario_fees_eth": gwei_to_eth(adjusted.fees_gwei),
-                "observed_share_price_gwei": observed.share_price_gwei,
-                "scenario_share_price_gwei": adjusted.share_price_gwei,
-            }
-        )
-    return pd.DataFrame(rows)
+    return build_equivocation_attack_snapshot(EquivocationAttackConfig(**config_payload))
 
 
-def build_behavior_projection_frame(snapshot: LiveDashboardSnapshot) -> pd.DataFrame:
-    """Build chart-friendly next-slot behavior projection points."""
-
-    rows = []
-    for projection in snapshot.behavior_projections:
-        rows.append(
-            {
-                "slot": projection.projection_slot,
-                "epoch": projection.projection_epoch,
-                "action": projection.action,
-                "action_label": ACTION_LABELS.get(projection.action, projection.action),
-                "action_color": ACTION_COLORS.get(projection.action, "#ecc170"),
-                "expected_delta_eth": gwei_to_eth(projection.expected_delta_gwei),
-                "projected_nav_eth": gwei_to_eth(projection.projected_nav_gwei),
-                "projected_cumulative_pnl_eth": gwei_to_eth(projection.projected_cumulative_pnl_gwei),
-                "projected_net_rewards_eth": gwei_to_eth(projection.projected_net_rewards_gwei),
-                "projected_penalties_eth": gwei_to_eth(projection.projected_penalties_gwei),
-                "projected_fees_eth": gwei_to_eth(projection.projected_fees_gwei),
-                "projected_share_price_gwei": projection.projected_share_price_gwei,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def build_leaderboard_frame(snapshot: LiveDashboardSnapshot) -> pd.DataFrame:
-    """Build the top-validator activity table."""
-
-    rows = []
-    for item in snapshot.leaderboard_rows:
-        rows.append(
-            {
-                "validator_index": item.validator_index,
-                "pubkey": item.public_key[:10] + "..." + item.public_key[-8:] if item.public_key else "",
-                "status": item.status,
-                "balance_eth": gwei_to_eth(item.balance_gwei),
-                "effective_balance_eth": gwei_to_eth(item.effective_balance_gwei),
-                "deposit_eth": gwei_to_eth(item.deposit_gwei),
-                "withdrawal_eth": gwei_to_eth(item.withdrawal_gwei),
-                "total_activity_eth": gwei_to_eth(item.total_activity_gwei),
-                "net_flow_eth": gwei_to_eth(item.net_flow_gwei),
-                "slot_delta_eth": gwei_to_eth(item.epoch_delta_gwei) if item.epoch_delta_gwei is not None else None,
-                "proposer_slashings": item.proposer_slashings,
-                "attester_slashings": item.attester_slashings,
-                "total_slashings": item.total_slashings,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def build_validator_history_frame(snapshot: LiveDashboardSnapshot) -> pd.DataFrame:
-    """Build a long-form validator history frame for line charts."""
-
-    rows = []
-    for validator_index, history in snapshot.validator_history.items():
-        for item in history:
-            rows.append(
-                {
-                    "slot": item.slot,
-                    "epoch": item.epoch,
-                    "validator_index": str(validator_index),
-                    "balance_eth": gwei_to_eth(item.balance_gwei),
-                    "status": item.status,
-                }
-            )
-    return pd.DataFrame(rows)
-
-
-def build_cadlabs_time_series_frame(replication: CadLabsReplicationSnapshot) -> pd.DataFrame:
-    """Build a DataFrame for the simplified CADLabs-style time-series charts."""
-
-    return pd.DataFrame(
-        [
-            {
-                "scenario": item.scenario,
-                "epoch": item.epoch,
-                "projected_validators": item.projected_validators,
-                "projected_staked_eth": item.projected_staked_eth,
-                "revenue_yield_pct": item.revenue_yield_pct,
-                "profit_yield_pct": item.profit_yield_pct,
-            }
-            for item in replication.time_series
-        ]
-    )
-
-
-def build_cadlabs_sweep_frame(replication: CadLabsReplicationSnapshot, series_name: str) -> pd.DataFrame:
-    """Build a sweep DataFrame for stake or ETH-price sensitivity charts."""
-
-    points = replication.stake_sweep if series_name == "stake" else replication.price_sweep
-    x_label = "staked_eth" if series_name == "stake" else "eth_price_usd"
-    return pd.DataFrame(
-        [
-            {
-                x_label: item.x_value,
-                "revenue_yield_pct": item.revenue_yield_pct,
-                "profit_yield_pct": item.profit_yield_pct,
-            }
-            for item in points
-        ]
-    )
-
-
-def build_cadlabs_surface_frame(replication: CadLabsReplicationSnapshot) -> pd.DataFrame:
-    """Build a DataFrame for the profit-yield heatmap."""
-
-    return pd.DataFrame(
-        [
-            {
-                "staked_eth": item.staked_eth,
-                "eth_price_usd": item.eth_price_usd,
-                "profit_yield_pct": item.profit_yield_pct,
-            }
-            for item in replication.profit_surface
-        ]
-    )
-
-
-def build_cadlabs_cohort_summary_frame(replication: CadLabsReplicationSnapshot) -> pd.DataFrame:
-    """Build a table of empirical cohort assumptions and resulting yields."""
-
-    return pd.DataFrame(
-        [
-            {
-                "cohort": item.cohort,
-                "validator_count": item.validator_count,
-                "share_pct": item.share_pct,
-                "active_share_pct": item.active_share_pct,
-                "avg_balance_eth": item.avg_balance_eth,
-                "avg_slot_delta_eth": item.avg_slot_delta_eth,
-                "total_activity_eth": item.total_activity_eth,
-                "slash_rate_pct": item.slash_rate_pct,
-                "reward_multiplier": item.reward_multiplier,
-                "drag_multiplier": item.drag_multiplier,
-                "cost_multiplier": item.cost_multiplier,
-                "revenue_yield_pct": item.revenue_yield_pct,
-                "profit_yield_pct": item.profit_yield_pct,
-            }
-            for item in replication.cohorts
-        ]
-    )
-
-
-def build_cadlabs_cohort_time_series_frame(replication: CadLabsReplicationSnapshot) -> pd.DataFrame:
-    """Build a DataFrame for cohort-level profit and revenue yield paths."""
-
-    return pd.DataFrame(
-        [
-            {
-                "cohort": item.cohort,
-                "epoch": item.epoch,
-                "revenue_yield_pct": item.revenue_yield_pct,
-                "profit_yield_pct": item.profit_yield_pct,
-            }
-            for item in replication.cohort_time_series
-        ]
-    )
-
-
-def add_epoch_regime_shading(figure: go.Figure, frame: pd.DataFrame) -> None:
-    """Shade slot ranges by epoch so shifting regimes stay visible."""
-
-    if frame.empty or "slot" not in frame or "epoch" not in frame:
-        return
-    regimes = (
-        frame.dropna(subset=["slot", "epoch"])
-        .groupby("epoch", as_index=False)
-        .agg(slot_start=("slot", "min"), slot_end=("slot", "max"))
-    )
-    for index, regime in regimes.iterrows():
-        figure.add_vrect(
-            x0=float(regime["slot_start"]) - 0.5,
-            x1=float(regime["slot_end"]) + 0.5,
-            fillcolor=EPOCH_REGIME_COLORS[index % len(EPOCH_REGIME_COLORS)],
-            line_width=0,
-            layer="below",
-        )
-
-
-def has_slash_adjustment(snapshot: LiveDashboardSnapshot) -> bool:
-    """Return whether the scenario differs from observed chain results."""
-
-    return (
-        abs(snapshot.slash_settings.slash_pass_through - 1.0) > 1e-9
-        or snapshot.slash_settings.modeled_slashed_validators > 0
-        and snapshot.slash_settings.modeled_slash_fraction > 0
-    )
-
-
-def add_history_trace(
-    figure: go.Figure,
-    frame: pd.DataFrame,
-    *,
-    y_column: str,
-    name: str,
-    color: str,
-    dash: str = "solid",
-) -> None:
-    """Add a consistent history line trace."""
-
-    figure.add_trace(
-        go.Scatter(
-            x=frame["slot"],
-            y=frame[y_column],
-            mode="lines+markers",
-            name=name,
-            line=dict(color=color, width=2.5, dash=dash),
-            marker=dict(size=7),
-        )
-    )
-
-
-def add_projection_trace(
-    figure: go.Figure,
-    frame: pd.DataFrame,
-    *,
-    y_column: str,
-    name: str,
-    hover_label: str,
-    symbol: str,
-) -> None:
-    """Overlay next-slot action markers on a chart."""
-
-    if frame.empty:
-        return
-    figure.add_trace(
-        go.Scatter(
-            x=frame["slot"],
-            y=frame[y_column],
-            mode="markers",
-            name=name,
-            showlegend=False,
-            marker=dict(
-                size=13,
-                symbol=symbol,
-                color=frame["action_color"].tolist(),
-                line=dict(color="rgba(7, 17, 29, 0.95)", width=1.5),
-            ),
-            customdata=frame[["action_label", "expected_delta_eth"]].to_numpy(),
-            hovertemplate=(
-                "%{customdata[0]}<br>"
-                "Slot %{x}<br>"
-                + hover_label
-                + ": %{y:.6f}<br>"
-                "Modeled delta: %{customdata[1]:.6f} ETH"
-                "<extra></extra>"
-            ),
-        )
-    )
-
-
-def style_time_series_figure(
+def _configure_figure(
     figure: go.Figure,
     *,
     title: str,
+    xaxis_title: str,
     yaxis_title: str,
 ) -> None:
-    """Apply consistent styling for dashboard time-series charts."""
-
     figure.update_layout(
-        template="plotly_dark",
         title=title,
+        template="plotly_dark",
+        paper_bgcolor="#050505",
+        plot_bgcolor="#050505",
+        font=dict(color="#f3f3f3"),
+        margin=dict(l=24, r=18, t=62, b=20),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0.0,
+            title_text="",
+            bgcolor="rgba(0,0,0,0)",
+        ),
         hovermode="x unified",
-        legend_title_text="",
-        margin=dict(l=18, r=18, t=58, b=18),
-        xaxis_title="Slot",
-        yaxis_title=yaxis_title,
-    )
-    figure.update_xaxes(type="linear", tickmode="auto")
-
-
-def render_action_cards(snapshot: LiveDashboardSnapshot) -> None:
-    """Render modeled next-action cards."""
-
-    st.subheader("Modeled Next Moves")
-    st.caption("These are local repo models from `simulator/behavior.py`, not CADLabs outputs, and are plotted as next-slot scenarios.")
-    best_action = snapshot.action_recommendations[0]
-    st.success(
-        f"Best modeled next move right now: `{best_action.action}` "
-        f"({gwei_to_eth(best_action.expected_delta_gwei):.6f} ETH expected next-slot delta)."
-    )
-
-    left, right = st.columns(2)
-    columns = [left, right]
-    for index, recommendation in enumerate(snapshot.action_recommendations):
-        risk_class = recommendation.risk_level.lower()
-        column = columns[index % 2]
-        caution = ""
-        if recommendation.caution:
-            caution = f"<p class='muted-note'>{recommendation.caution}</p>"
-        column.markdown(
-            f"""
-            <div class="action-card">
-                <div class="action-title">{recommendation.action}</div>
-                <div class="risk-pill risk-{risk_class}">{recommendation.risk_level}</div>
-                <p><strong>Modeled next-slot delta:</strong> {gwei_to_eth(recommendation.expected_delta_gwei):.6f} ETH</p>
-                <p><strong>Confidence:</strong> {recommendation.confidence:.0%}</p>
-                <p>{recommendation.rationale}</p>
-                {caution}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-def render_pool_charts(snapshot: LiveDashboardSnapshot) -> None:
-    """Render aggregate charts for the top-validator basket."""
-
-    pool_history_frame = build_pool_history_frame(snapshot)
-    behavior_projection_frame = build_behavior_projection_frame(snapshot)
-    validator_history_frame = build_validator_history_frame(snapshot)
-    adjusted = has_slash_adjustment(snapshot)
-
-    if not pool_history_frame.empty:
-        st.subheader("Aggregate Time Series")
-        st.caption(
-            f"Showing the latest {len(pool_history_frame)} stored slots for the current validator basket, "
-            f"covering slots {snapshot.history_window_start_slot}-{snapshot.history_window_end_slot}. "
-            f"Behavior markers are plotted one step ahead at slot {snapshot.head_slot + 1}: "
-            "add_to_stake (gold), wait (blue), withdraw (orange), nothing-at-stake-attack (crimson)."
-        )
-
-        upper_left, upper_right = st.columns(2)
-        nav_figure = go.Figure()
-        if adjusted:
-            add_history_trace(
-                nav_figure,
-                pool_history_frame,
-                y_column="observed_nav_eth",
-                name="Observed NAV",
-                color=SERIES_COLORS["observed_nav"],
-                dash="dot",
-            )
-        add_history_trace(
-            nav_figure,
-            pool_history_frame,
-            y_column="scenario_nav_eth",
-            name="Scenario NAV",
-            color=SERIES_COLORS["scenario_nav"],
-        )
-        add_projection_trace(
-            nav_figure,
-            behavior_projection_frame,
-            y_column="projected_nav_eth",
-            name="Projected next-slot NAV",
-            hover_label="Scenario NAV (ETH)",
-            symbol="diamond",
-        )
-        add_epoch_regime_shading(nav_figure, pool_history_frame)
-        style_time_series_figure(nav_figure, title="Slot-Level Aggregate NAV", yaxis_title="ETH")
-        upper_left.plotly_chart(nav_figure, width="stretch")
-
-        pnl_figure = go.Figure()
-        if adjusted:
-            add_history_trace(
-                pnl_figure,
-                pool_history_frame,
-                y_column="observed_cumulative_pnl_eth",
-                name="Observed cumulative PnL",
-                color=SERIES_COLORS["observed_cumulative_pnl"],
-                dash="dot",
-            )
-        add_history_trace(
-            pnl_figure,
-            pool_history_frame,
-            y_column="scenario_cumulative_pnl_eth",
-            name="Scenario cumulative PnL",
-            color=SERIES_COLORS["scenario_cumulative_pnl"],
-        )
-        add_projection_trace(
-            pnl_figure,
-            behavior_projection_frame,
-            y_column="projected_cumulative_pnl_eth",
-            name="Projected next-slot cumulative PnL",
-            hover_label="Scenario cumulative PnL (ETH)",
-            symbol="diamond-open",
-        )
-        add_epoch_regime_shading(pnl_figure, pool_history_frame)
-        style_time_series_figure(pnl_figure, title="Slot-Level Cumulative PnL", yaxis_title="ETH")
-        upper_right.plotly_chart(pnl_figure, width="stretch")
-
-        lower_left, lower_right = st.columns(2)
-        reward_figure = go.Figure()
-        if adjusted:
-            add_history_trace(
-                reward_figure,
-                pool_history_frame,
-                y_column="observed_net_rewards_eth",
-                name="Observed net rewards",
-                color=SERIES_COLORS["observed_net_rewards"],
-                dash="dot",
-            )
-            add_history_trace(
-                reward_figure,
-                pool_history_frame,
-                y_column="observed_penalties_eth",
-                name="Observed penalties + slash losses",
-                color=SERIES_COLORS["observed_penalties"],
-                dash="dot",
-            )
-        add_history_trace(
-            reward_figure,
-            pool_history_frame,
-            y_column="scenario_net_rewards_eth",
-            name="Scenario net rewards",
-            color=SERIES_COLORS["scenario_net_rewards"],
-        )
-        add_history_trace(
-            reward_figure,
-            pool_history_frame,
-            y_column="scenario_penalties_eth",
-            name="Scenario penalties + slash losses",
-            color=SERIES_COLORS["scenario_penalties"],
-        )
-        add_history_trace(
-            reward_figure,
-            pool_history_frame,
-            y_column="scenario_fees_eth",
-            name="Derived fees",
-            color=SERIES_COLORS["scenario_fees"],
-        )
-        add_projection_trace(
-            reward_figure,
-            behavior_projection_frame,
-            y_column="projected_net_rewards_eth",
-            name="Projected next-slot net rewards",
-            hover_label="Projected net rewards (ETH)",
-            symbol="circle",
-        )
-        add_projection_trace(
-            reward_figure,
-            behavior_projection_frame,
-            y_column="projected_penalties_eth",
-            name="Projected penalties",
-            hover_label="Projected penalties (ETH)",
-            symbol="x",
-        )
-        add_projection_trace(
-            reward_figure,
-            behavior_projection_frame,
-            y_column="projected_fees_eth",
-            name="Projected fees",
-            hover_label="Projected fees (ETH)",
-            symbol="square",
-        )
-        add_epoch_regime_shading(reward_figure, pool_history_frame)
-        style_time_series_figure(
-            reward_figure,
-            title="Derived Slot-Level Rewards, Penalties, And Fees",
-            yaxis_title="ETH",
-        )
-        lower_left.plotly_chart(reward_figure, width="stretch")
-
-        share_figure = go.Figure()
-        if adjusted:
-            add_history_trace(
-                share_figure,
-                pool_history_frame,
-                y_column="observed_share_price_gwei",
-                name="Observed share price",
-                color=SERIES_COLORS["observed_share_price"],
-                dash="dot",
-            )
-        add_history_trace(
-            share_figure,
-            pool_history_frame,
-            y_column="scenario_share_price_gwei",
-            name="Scenario share price",
-            color=SERIES_COLORS["scenario_share_price"],
-        )
-        add_projection_trace(
-            share_figure,
-            behavior_projection_frame,
-            y_column="projected_share_price_gwei",
-            name="Projected next-slot share price",
-            hover_label="Projected share price (gwei)",
-            symbol="star",
-        )
-        add_epoch_regime_shading(share_figure, pool_history_frame)
-        style_time_series_figure(
-            share_figure,
-            title="Slot-Level Share Price",
-            yaxis_title="gwei",
-        )
-        lower_right.plotly_chart(share_figure, width="stretch")
-
-        st.subheader("Validator Flow And Balance History")
-        activity_frame = build_leaderboard_frame(snapshot)
-        if not activity_frame.empty:
-            slash_figure = px.bar(
-                activity_frame.head(20),
-                x="validator_index",
-                y=["deposit_eth", "withdrawal_eth"],
-                barmode="group",
-                title="Top 20 Validator Flows In Lookback Window",
-                labels={"value": "ETH", "validator_index": "validator"},
-                template="plotly_dark",
-            )
-            st.plotly_chart(slash_figure, width="stretch")
-
-    if not validator_history_frame.empty:
-        validator_figure = px.line(
-            validator_history_frame,
-            x="slot",
-            y="balance_eth",
-            color="validator_index",
-            markers=True,
-            title="Tracked Validator Slot Balance History",
-            labels={"balance_eth": "ETH", "validator_index": "validator"},
-            template="plotly_dark",
-        )
-        add_epoch_regime_shading(validator_figure, validator_history_frame)
-        st.plotly_chart(validator_figure, width="stretch")
-
-
-def render_cadlabs_replication_tab(snapshot: LiveDashboardSnapshot) -> None:
-    """Render a simplified CADLabs-style yield lab from the live validator basket."""
-
-    st.subheader("CADLabs-Style Validator Revenue And Profit Yields")
-    st.caption(
-        "This tab replicates the shape of CADLabs notebook-style validator revenue and profit yield experiments "
-        "using the live validator basket from the main page. It uses published CADLabs formulas for revenue, "
-        "profit, and annualized yields, but the adoption path and cohorting remain local empirical approximations."
-    )
-
-    controls_left, controls_middle, controls_right = st.columns(3)
-    eth_price_usd = float(
-        controls_left.number_input(
-            "ETH price assumption (USD)",
-            min_value=250.0,
-            max_value=25_000.0,
-            value=2500.0,
-            step=250.0,
-            help="Revenue yield is effectively price-neutral, while profit yield changes as fixed validator opex is diluted across staked ETH value.",
-        )
-    )
-    monthly_validator_cost_usd = float(
-        controls_middle.number_input(
-            "Validator opex per month (USD)",
-            min_value=0.0,
-            max_value=500.0,
-            value=15.0,
-            step=1.0,
-            help="Simplified fixed validator operating cost used to convert CADLabs-style revenue yield into profit yield.",
-        )
-    )
-    projection_epochs = int(
-        controls_right.slider(
-            "Projection horizon (epochs)",
-            min_value=8,
-            max_value=256,
-            value=64,
-            step=8,
-            help="Future epochs shown in the low, normal, and high adoption scenario projections.",
-        )
-    )
-
-    replication = build_cadlabs_replication(
-        snapshot,
-        CadLabsReplicationConfig(
-            eth_price_usd=eth_price_usd,
-            monthly_validator_cost_usd=monthly_validator_cost_usd,
-            projection_epochs=projection_epochs,
+        xaxis=dict(
+            title=xaxis_title,
+            gridcolor="rgba(255, 255, 255, 0.12)",
+            linecolor="rgba(255, 255, 255, 0.18)",
+            zerolinecolor="rgba(255, 255, 255, 0.14)",
+        ),
+        yaxis=dict(
+            title=yaxis_title,
+            gridcolor="rgba(255, 255, 255, 0.12)",
+            linecolor="rgba(255, 255, 255, 0.18)",
+            zerolinecolor="rgba(255, 255, 255, 0.14)",
         ),
     )
-    time_series_frame = build_cadlabs_time_series_frame(replication)
-    stake_sweep_frame = build_cadlabs_sweep_frame(replication, "stake")
-    price_sweep_frame = build_cadlabs_sweep_frame(replication, "price")
-    surface_frame = build_cadlabs_surface_frame(replication)
-    cohort_summary_frame = build_cadlabs_cohort_summary_frame(replication)
-    cohort_time_series_frame = build_cadlabs_cohort_time_series_frame(replication)
 
-    metrics = st.columns(5)
-    metrics[0].metric("Tracked validators", replication.tracked_validators)
-    metrics[1].metric("Active share", f"{replication.active_share_pct:.1f}%")
-    metrics[2].metric("Revenue yield", f"{replication.annualized_revenue_yield_pct:.2f}%")
-    metrics[3].metric("Profit yield", f"{replication.annualized_profit_yield_pct:.2f}%")
-    metrics[4].metric(
-        "Inferred adoption",
-        f"{replication.inferred_adoption_validators_per_epoch:.2f} val/epoch",
+
+def _line_chart(
+    frame: pd.DataFrame,
+    *,
+    x: str,
+    y: str,
+    color: str,
+    title: str,
+    yaxis_title: str,
+    color_discrete_map: dict[str, str] | None = None,
+) -> go.Figure:
+    figure = px.line(
+        frame,
+        x=x,
+        y=y,
+        color=color,
+        markers=True,
+        color_discrete_map=color_discrete_map,
     )
-
-    st.markdown(
-        f"""
-        <p class="muted-note">
-        Current sample stake: {replication.current_staked_eth:.4f} ETH | Average validator balance: {replication.average_balance_eth:.4f} ETH |
-        Annualized net yield before opex: {replication.annualized_net_yield_pct:.2f}% | Annualized opex drag: {replication.annualized_cost_yield_pct:.2f}%
-        </p>
-        """,
-        unsafe_allow_html=True,
+    _configure_figure(
+        figure,
+        title=title,
+        xaxis_title="Time" if x == "timestamp" else x.replace("_", " ").title(),
+        yaxis_title=yaxis_title,
     )
+    return figure
 
-    if not time_series_frame.empty:
-        top_left, top_right = st.columns(2)
 
-        revenue_figure = px.line(
-            time_series_frame,
-            x="epoch",
-            y="revenue_yield_pct",
-            color="scenario",
-            title="Revenue Yield Over Time",
-            labels={
-                "epoch": "Epoch",
-                "revenue_yield_pct": "Annualized revenue yield (%)",
-                "scenario": "Scenario",
-            },
-            template="plotly_dark",
-        )
-        revenue_figure.update_layout(margin=dict(l=18, r=18, t=58, b=18), hovermode="x unified")
-        top_left.plotly_chart(revenue_figure, width="stretch")
+def _metric_columns(snapshot: SimulationDashboardSnapshot) -> None:
+    metrics = snapshot.overview_metrics
+    top = st.columns(6)
+    top[0].metric("Start validators", f"{metrics['starting_validator_count']:,.0f}")
+    top[1].metric("Final validators", f"{metrics['final_validator_count']:,.0f}")
+    top[2].metric("Start staked", f"{metrics['starting_eth_staked']:,.0f} ETH")
+    top[3].metric("Final staked", f"{metrics['final_eth_staked']:,.0f} ETH")
+    top[4].metric("Final revenue yield", f"{metrics['final_revenue_yield_pct']:.2f}%")
+    top[5].metric("Final profit yield", f"{metrics['final_profit_yield_pct']:.2f}%")
 
-        profit_figure = px.line(
-            time_series_frame,
-            x="epoch",
-            y="profit_yield_pct",
-            color="scenario",
-            title="Profit Yield Over Time",
-            labels={
-                "epoch": "Epoch",
-                "profit_yield_pct": "Annualized profit yield (%)",
-                "scenario": "Scenario",
-            },
-            template="plotly_dark",
-        )
-        profit_figure.update_layout(margin=dict(l=18, r=18, t=58, b=18), hovermode="x unified")
-        top_right.plotly_chart(profit_figure, width="stretch")
 
-    middle_left, middle_right = st.columns(2)
-    if not stake_sweep_frame.empty:
-        stake_melt = stake_sweep_frame.melt(
-            id_vars=["staked_eth"],
-            value_vars=["revenue_yield_pct", "profit_yield_pct"],
-            var_name="metric",
-            value_name="yield_pct",
-        )
-        stake_figure = px.line(
-            stake_melt,
-            x="staked_eth",
-            y="yield_pct",
-            color="metric",
-            title="Yield Sensitivity To ETH Staked",
-            labels={
-                "staked_eth": "Projected ETH staked",
-                "yield_pct": "Annualized yield (%)",
-                "metric": "Metric",
-            },
-            template="plotly_dark",
-        )
-        stake_figure.update_layout(margin=dict(l=18, r=18, t=58, b=18), hovermode="x unified")
-        middle_left.plotly_chart(stake_figure, width="stretch")
+def render_sidebar(current: DashboardAssumptions) -> DashboardAssumptions:
+    """Collect simulation controls without auto-refresh behaviour."""
 
-    if not price_sweep_frame.empty:
-        price_melt = price_sweep_frame.melt(
-            id_vars=["eth_price_usd"],
-            value_vars=["revenue_yield_pct", "profit_yield_pct"],
-            var_name="metric",
-            value_name="yield_pct",
-        )
-        price_figure = px.line(
-            price_melt,
-            x="eth_price_usd",
-            y="yield_pct",
-            color="metric",
-            title="Yield Sensitivity To ETH Price",
-            labels={
-                "eth_price_usd": "ETH price (USD)",
-                "yield_pct": "Annualized yield (%)",
-                "metric": "Metric",
-            },
-            template="plotly_dark",
-        )
-        price_figure.update_layout(margin=dict(l=18, r=18, t=58, b=18), hovermode="x unified")
-        middle_right.plotly_chart(price_figure, width="stretch")
+    st.sidebar.title("Simulation Controls")
+    # st.sidebar.caption(
+    #     "This dashboard is now simulation-only. It does not poll beacon APIs, refresh on a slot cadence, or depend on live Hoodi data."
+    # )
 
-    if not surface_frame.empty:
-        st.subheader("Profit Yield Surface")
-        surface_grid = surface_frame.pivot(
-            index="eth_price_usd",
-            columns="staked_eth",
-            values="profit_yield_pct",
-        )
-        surface_figure = go.Figure(
-            data=go.Heatmap(
-                x=surface_grid.columns.tolist(),
-                y=surface_grid.index.tolist(),
-                z=surface_grid.to_numpy(),
-                colorscale="Tealrose",
-                colorbar=dict(title="Profit yield (%)"),
+    with st.sidebar.form("simulation_controls"):
+        st.markdown("### Starting State")
+        initial_validator_count = int(
+            st.number_input(
+                "Active validators",
+                min_value=1,
+                value=int(current.initial_validator_count),
+                step=1_000,
             )
         )
-        surface_figure.update_layout(
-            template="plotly_dark",
-            title="Profit Yield Across ETH Price And ETH Staked",
-            xaxis_title="Projected ETH staked",
-            yaxis_title="ETH price (USD)",
-            margin=dict(l=18, r=18, t=58, b=18),
+        initial_eth_staked = float(
+            st.number_input(
+                "ETH staked",
+                min_value=1.0,
+                value=float(current.initial_eth_staked),
+                step=100_000.0,
+            )
         )
-        st.plotly_chart(surface_figure, width="stretch")
-
-    bottom_left, bottom_right = st.columns(2)
-    if not cohort_time_series_frame.empty:
-        cohort_figure = px.line(
-            cohort_time_series_frame,
-            x="epoch",
-            y="profit_yield_pct",
-            color="cohort",
-            title="Profit Yield By Empirical Validator Cohort",
-            labels={
-                "epoch": "Epoch",
-                "profit_yield_pct": "Annualized profit yield (%)",
-                "cohort": "Cohort",
-            },
-            template="plotly_dark",
+        initial_eth_supply = float(
+            st.number_input(
+                "ETH supply",
+                min_value=1.0,
+                value=float(current.initial_eth_supply),
+                step=500_000.0,
+            )
         )
-        cohort_figure.update_layout(margin=dict(l=18, r=18, t=58, b=18), hovermode="x unified")
-        bottom_left.plotly_chart(cohort_figure, width="stretch")
-
-    if not cohort_summary_frame.empty:
-        cohort_bar = px.bar(
-            cohort_summary_frame,
-            x="cohort",
-            y="validator_count",
-            color="profit_yield_pct",
-            color_continuous_scale="Tealrose",
-            title="Empirical Cohort Composition",
-            labels={"validator_count": "Validators", "cohort": "Cohort"},
-            template="plotly_dark",
+        initial_eth_price_usd = float(
+            st.number_input(
+                "ETH price (USD)",
+                min_value=1.0,
+                value=float(current.initial_eth_price_usd),
+                step=100.0,
+            )
         )
-        cohort_bar.update_layout(margin=dict(l=18, r=18, t=58, b=18))
-        bottom_right.plotly_chart(cohort_bar, width="stretch")
 
-    st.subheader("Empirical Cohort Table")
-    st.dataframe(
-        cohort_summary_frame,
-        width="stretch",
+        st.markdown("### Network Assumptions")
+        validator_adoption_per_epoch = float(
+            st.number_input(
+                "New validators per epoch",
+                min_value=0.0,
+                value=float(current.validator_adoption_per_epoch),
+                step=0.25,
+            )
+        )
+        validator_uptime = float(
+            st.slider(
+                "Validator uptime",
+                min_value=float(2 / 3),
+                max_value=1.0,
+                value=float(current.validator_uptime),
+                step=0.005,
+            )
+        )
+        slashing_events_per_1000_epochs = int(
+            st.slider(
+                "Slashing events per 1,000 epochs",
+                min_value=0,
+                max_value=25,
+                value=int(current.slashing_events_per_1000_epochs),
+                step=1,
+            )
+        )
+        mev_per_block_eth = float(
+            st.number_input(
+                "MEV per block (ETH)",
+                min_value=0.0,
+                value=float(current.mev_per_block_eth),
+                step=0.01,
+            )
+        )
+        base_fee_gwei = float(
+            st.number_input(
+                "Base fee (gwei / gas)",
+                min_value=0.0,
+                value=float(current.base_fee_gwei),
+                step=1.0,
+            )
+        )
+        priority_fee_gwei = float(
+            st.number_input(
+                "Priority fee (gwei / gas)",
+                min_value=0.0,
+                value=float(current.priority_fee_gwei),
+                step=0.5,
+            )
+        )
+        gas_target_per_block = float(
+            st.number_input(
+                "Gas target per block",
+                min_value=1.0,
+                value=float(current.gas_target_per_block),
+                step=1_000_000.0,
+            )
+        )
+
+        st.markdown("### Scenario Shape")
+        simulation_time_months = int(
+            st.slider(
+                "Time horizon (months)",
+                min_value=6,
+                max_value=60,
+                value=int(current.simulation_time_months),
+                step=6,
+            )
+        )
+        low_adoption_multiplier = float(
+            st.slider(
+                "Low adoption multiplier",
+                min_value=0.1,
+                max_value=1.0,
+                value=float(current.low_adoption_multiplier),
+                step=0.05,
+            )
+        )
+        high_adoption_multiplier = float(
+            st.slider(
+                "High adoption multiplier",
+                min_value=1.0,
+                max_value=3.0,
+                value=float(current.high_adoption_multiplier),
+                step=0.05,
+            )
+        )
+        epochs_per_timestep = int(
+            st.select_slider(
+                "Epochs per timestep",
+                options=[32, 64, 128, 225, 450],
+                value=int(current.epochs_per_timestep),
+            )
+        )
+
+        st.markdown("### Sweep Resolution")
+        stake_sweep_points = int(
+            st.slider(
+                "Stake sweep points",
+                min_value=10,
+                max_value=40,
+                value=int(current.stake_sweep_points),
+                step=5,
+            )
+        )
+        price_sweep_points = int(
+            st.slider(
+                "Price sweep points",
+                min_value=10,
+                max_value=40,
+                value=int(current.price_sweep_points),
+                step=5,
+            )
+        )
+        stake_sweep_max_pct_of_supply = float(
+            st.slider(
+                "Max stake sweep share of supply",
+                min_value=0.10,
+                max_value=0.60,
+                value=float(current.stake_sweep_max_pct_of_supply),
+                step=0.05,
+            )
+        )
+
+        submitted = st.form_submit_button("Run Simulation", use_container_width=True)
+
+    if submitted:
+        return DashboardAssumptions(
+            simulation_time_months=simulation_time_months,
+            epochs_per_timestep=epochs_per_timestep,
+            initial_validator_count=initial_validator_count,
+            initial_eth_staked=initial_eth_staked,
+            initial_eth_supply=initial_eth_supply,
+            initial_eth_price_usd=initial_eth_price_usd,
+            validator_adoption_per_epoch=validator_adoption_per_epoch,
+            low_adoption_multiplier=low_adoption_multiplier,
+            high_adoption_multiplier=high_adoption_multiplier,
+            validator_uptime=validator_uptime,
+            slashing_events_per_1000_epochs=slashing_events_per_1000_epochs,
+            mev_per_block_eth=mev_per_block_eth,
+            base_fee_gwei=base_fee_gwei,
+            priority_fee_gwei=priority_fee_gwei,
+            gas_target_per_block=gas_target_per_block,
+            stake_sweep_points=stake_sweep_points,
+            price_sweep_points=price_sweep_points,
+            stake_sweep_max_pct_of_supply=stake_sweep_max_pct_of_supply,
+            stake_price_low_multiplier=current.stake_price_low_multiplier,
+            stake_price_high_multiplier=current.stake_price_high_multiplier,
+        )
+
+    return current
+
+
+def render_overview_tab(snapshot: SimulationDashboardSnapshot) -> None:
+    """Render summary metrics, assumptions, and export controls."""
+
+    _metric_columns(snapshot)
+    # st.markdown(
+    #     """
+    #     <div class="model-chip">Simulation-only dashboard</div>
+    #     <div class="model-chip">CADLabs experiment patterns</div>
+    #     <div class="model-chip">Transparent starting state</div>
+    #     <div class="model-chip">No live slot refresh</div>
+    #     """,
+    #     unsafe_allow_html=True,
+    # )
+
+    left, right = st.columns([1.15, 0.85])
+
+    left.subheader("Scenario Summary")
+    left.dataframe(
+        snapshot.scenario_summary_frame.rename(
+            columns={
+                "scenario": "Scenario",
+                "final_validator_count": "Final validators",
+                "final_eth_staked": "Final ETH staked",
+                "eth_price": "ETH price",
+                "final_revenue_yield_pct": "Revenue yield",
+                "final_profit_yield_pct": "Profit yield",
+                "final_cumulative_profit_yield_pct": "Cumulative profit yield",
+            }
+        ),
+        use_container_width=True,
         hide_index=True,
         column_config={
-            "share_pct": st.column_config.NumberColumn(format="%.2f%%"),
-            "active_share_pct": st.column_config.NumberColumn(format="%.2f%%"),
-            "avg_balance_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-            "avg_slot_delta_eth": st.column_config.NumberColumn(format="%.9f ETH"),
-            "total_activity_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-            "slash_rate_pct": st.column_config.NumberColumn(format="%.2f%%"),
-            "reward_multiplier": st.column_config.NumberColumn(format="%.2f x"),
-            "drag_multiplier": st.column_config.NumberColumn(format="%.2f x"),
-            "cost_multiplier": st.column_config.NumberColumn(format="%.2f x"),
-            "revenue_yield_pct": st.column_config.NumberColumn(format="%.2f%%"),
-            "profit_yield_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "Final validators": st.column_config.NumberColumn(format="%.0f"),
+            "Final ETH staked": st.column_config.NumberColumn(format="%.0f ETH"),
+            "ETH price": st.column_config.NumberColumn(format="$%.0f"),
+            "Revenue yield": st.column_config.NumberColumn(format="%.2f%%"),
+            "Profit yield": st.column_config.NumberColumn(format="%.2f%%"),
+            "Cumulative profit yield": st.column_config.NumberColumn(format="%.2f%%"),
         },
     )
 
-    with st.expander("CADLabs-Style Assumptions", expanded=False):
-        for note in replication.notes:
-            st.write(f"- {note}")
-
-
-def render_machine_readable_snapshot(snapshot: LiveDashboardSnapshot) -> None:
-    """Render and expose the latest synthetic basket snapshot payload."""
-
-    st.subheader("Snapshot Payload")
-    payload = {
-        "observed": asdict(snapshot.pool_snapshot),
-        "scenario_adjusted": asdict(snapshot.adjusted_pool_snapshot),
-        "behavior_projections": [asdict(item) for item in snapshot.behavior_projections],
-        "activity_window_start_slot": snapshot.activity_window_start_slot,
-        "activity_window_end_slot": snapshot.activity_window_end_slot,
-        "history_window_start_slot": snapshot.history_window_start_slot,
-        "history_window_end_slot": snapshot.history_window_end_slot,
-    }
-    st.json(payload)
-    st.download_button(
-        label="Download latest snapshot JSON",
+    right.subheader("Export")
+    payload = snapshot_to_json_payload(snapshot)
+    right.download_button(
+        "Download snapshot JSON",
         data=json.dumps(payload, indent=2),
-        file_name=f"{snapshot.pool.pool_id}-slot-{snapshot.head_slot}.json",
+        file_name="staking_economics_snapshot.json",
         mime="application/json",
+        use_container_width=True,
+    )
+    right.caption(
+        f"Generated at {snapshot.generated_at.isoformat()} from local model assumptions only."
+    )
+    with right.expander("Machine-readable payload", expanded=False):
+        st.json(payload)
+
+    state_col, controls_col = st.columns(2)
+    state_col.subheader("Starting State")
+    state_col.dataframe(
+        snapshot.starting_state_frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "dashboard_value": st.column_config.NumberColumn("Dashboard value", format="%.4f"),
+            "model_default": st.column_config.NumberColumn("Model default", format="%.4f"),
+        },
+    )
+
+    controls_col.subheader("Model Controls")
+    controls_col.dataframe(
+        snapshot.model_controls_frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "dashboard_value": st.column_config.NumberColumn("Dashboard value", format="%.4f"),
+            "model_default": st.column_config.NumberColumn("Model default", format="%.4f"),
+        },
+    )
+
+    st.subheader("Notes")
+    for note in snapshot.notes:
+        st.markdown(f'<div class="note-card">{note}</div>', unsafe_allow_html=True)
+
+
+def render_time_series_tab(snapshot: SimulationDashboardSnapshot) -> None:
+    """Render notebook-style time-domain charts."""
+
+    frame = snapshot.time_series_frame.copy()
+    x_axis = "timestamp" if "timestamp" in frame.columns else "timestep"
+
+    top_left, top_right = st.columns(2)
+    top_left.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="number_of_active_validators",
+            color="scenario",
+            title="Active Validators Over Time",
+            yaxis_title="Validators",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
+    )
+    top_right.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="eth_staked",
+            color="scenario",
+            title="ETH Staked Over Time",
+            yaxis_title="ETH",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
+    )
+
+    middle_left, middle_right = st.columns(2)
+    middle_left.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="total_revenue_yields_pct",
+            color="scenario",
+            title="Annualized Revenue Yield",
+            yaxis_title="Yield (%)",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
+    )
+    middle_right.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="total_profit_yields_pct",
+            color="scenario",
+            title="Annualized Profit Yield",
+            yaxis_title="Yield (%)",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
+    )
+
+    lower_left, lower_right = st.columns(2)
+    lower_left.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="cumulative_profit_yields_pct",
+            color="scenario",
+            title="Cumulative Profit Yield",
+            yaxis_title="Yield (%)",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
+    )
+    lower_right.plotly_chart(
+        _line_chart(
+            frame,
+            x=x_axis,
+            y="revenue_profit_yield_spread_pct",
+            color="scenario",
+            title="Revenue-Profit Yield Spread",
+            yaxis_title="Spread (%)",
+            color_discrete_map=SCENARIO_COLORS,
+        ),
+        use_container_width=True,
     )
 
 
-def render_methodology(snapshot: LiveDashboardSnapshot) -> None:
-    """Render provenance and modeling notes."""
+def render_phase_space_tab(snapshot: SimulationDashboardSnapshot) -> None:
+    """Render ETH staked, ETH price, and surface analyses."""
 
-    with st.expander("Methodology And Provenance", expanded=False):
-        for note in snapshot.methodology_notes:
+    stake_frame = snapshot.stake_sweep_frame.copy()
+    stake_melt = stake_frame.melt(
+        id_vars=["price_scenario", "eth_price", "eth_staked"],
+        value_vars=["total_revenue_yields_pct", "total_profit_yields_pct"],
+        var_name="metric",
+        value_name="yield_pct",
+    )
+    stake_melt["metric"] = stake_melt["metric"].map(
+        {
+            "total_revenue_yields_pct": "Revenue yield",
+            "total_profit_yields_pct": "Profit yield",
+        }
+    )
+    stake_figure = px.line(
+        stake_melt,
+        x="eth_staked",
+        y="yield_pct",
+        color="price_scenario",
+        line_dash="metric",
+        markers=True,
+        color_discrete_map={
+            "Lower price": "#2f8f83",
+            "Starting price": "#1b5e87",
+            "Higher price": "#d58b1f",
+        },
+    )
+    _configure_figure(
+        stake_figure,
+        title="Yield Sensitivity to ETH Staked",
+        xaxis_title="ETH staked",
+        yaxis_title="Yield (%)",
+    )
+
+    price_frame = snapshot.price_sweep_frame.copy()
+    price_melt = price_frame.melt(
+        id_vars=["eth_price", "eth_staked"],
+        value_vars=["total_revenue_yields_pct", "total_profit_yields_pct"],
+        var_name="metric",
+        value_name="yield_pct",
+    )
+    price_melt["metric"] = price_melt["metric"].map(
+        {
+            "total_revenue_yields_pct": "Revenue yield",
+            "total_profit_yields_pct": "Profit yield",
+        }
+    )
+    price_figure = px.line(
+        price_melt,
+        x="eth_price",
+        y="yield_pct",
+        color="metric",
+        markers=True,
+        color_discrete_map=METRIC_COLORS,
+    )
+    _configure_figure(
+        price_figure,
+        title="Yield Sensitivity to ETH Price",
+        xaxis_title="ETH price (USD)",
+        yaxis_title="Yield (%)",
+    )
+
+    top_left, top_right = st.columns(2)
+    top_left.plotly_chart(stake_figure, use_container_width=True)
+    top_right.plotly_chart(price_figure, use_container_width=True)
+
+    surface_grid = snapshot.surface_frame.pivot_table(
+        index="eth_price",
+        columns="eth_staked",
+        values="total_profit_yields_pct",
+    )
+    surface_figure = go.Figure(
+        data=go.Heatmap(
+            x=surface_grid.columns.tolist(),
+            y=surface_grid.index.tolist(),
+            z=surface_grid.to_numpy(),
+            colorscale=[
+                [0.0, "#173247"],
+                [0.35, "#1b6f8a"],
+                [0.7, "#ddb25d"],
+                [1.0, "#cb5d3e"],
+            ],
+            colorbar=dict(title="Profit yield (%)"),
+        )
+    )
+    _configure_figure(
+        surface_figure,
+        title="Profit Yield Surface",
+        xaxis_title="ETH staked",
+        yaxis_title="ETH price (USD)",
+    )
+    st.plotly_chart(surface_figure, use_container_width=True)
+
+
+def render_validator_environment_tab(snapshot: SimulationDashboardSnapshot) -> None:
+    """Render validator-environment compositions and outcomes."""
+
+    if snapshot.environment_time_series_frame.empty:
+        st.warning("Validator-environment outputs were not available for this run.")
+        return
+
+    frame = snapshot.environment_time_series_frame.copy()
+    frame["environment"] = pd.Categorical(
+        frame["environment"],
+        categories=snapshot.validator_environment_assumptions_frame["environment"].tolist(),
+        ordered=True,
+    )
+
+    profit_figure = px.line(
+        frame,
+        x="timestamp",
+        y="profit_yield_pct",
+        color="environment",
+        markers=True,
+        color_discrete_sequence=ENVIRONMENT_COLORS,
+    )
+    _configure_figure(
+        profit_figure,
+        title="Profit Yield by Validator Environment",
+        xaxis_title="Time",
+        yaxis_title="Profit yield (%)",
+    )
+
+    composition_figure = px.area(
+        frame,
+        x="timestamp",
+        y="validator_count",
+        color="environment",
+        color_discrete_sequence=ENVIRONMENT_COLORS,
+    )
+    _configure_figure(
+        composition_figure,
+        title="Validator Environment Composition",
+        xaxis_title="Time",
+        yaxis_title="Validators",
+    )
+
+    top_left, top_right = st.columns(2)
+    top_left.plotly_chart(profit_figure, use_container_width=True)
+    top_right.plotly_chart(composition_figure, use_container_width=True)
+
+    bottom_left, bottom_right = st.columns(2)
+    bottom_left.subheader("Final Environment Outcomes")
+    bottom_left.dataframe(
+        snapshot.environment_summary_frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "share_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "final_validator_count": st.column_config.NumberColumn(format="%.0f"),
+            "final_revenue_yield_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "final_profit_yield_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "final_cost_usd_per_epoch": st.column_config.NumberColumn(format="$%.4f"),
+        },
+    )
+
+    bottom_right.subheader("Environment Assumptions")
+    bottom_right.dataframe(
+        snapshot.validator_environment_assumptions_frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "share_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "starting_validator_count": st.column_config.NumberColumn(format="%.0f"),
+            "hardware_cost_usd_per_epoch": st.column_config.NumberColumn(format="$%.4f"),
+            "cloud_cost_usd_per_epoch": st.column_config.NumberColumn(format="$%.4f"),
+            "third_party_cost_pct_of_rewards": st.column_config.NumberColumn(format="%.2f%%"),
+        },
+    )
+
+
+def render_equivocation_attack_tab(snapshot: SimulationDashboardSnapshot) -> None:
+    """Render a custom equivocation-attack and accountable-safety view."""
+
+    st.caption(
+        "This tab uses the repo's own high-level safety model to visualize a balanced-partition equivocation scenario. "
+        "It focuses on slashable-validator counts, conflicting-finalization feasibility, and how quickly slashing pushes the attacker share back below the accountable-safety bound."
+    )
+
+    controls_top = st.columns(4)
+    total_validators = int(
+        controls_top[0].number_input(
+            "Total validators",
+            min_value=1,
+            value=int(snapshot.assumptions.initial_validator_count),
+            step=1_000,
+            key="attack_total_validators",
+        )
+    )
+    attacker_fraction_pct = float(
+        controls_top[1].slider(
+            "Equivocating attacker share (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=34.0,
+            step=1.0,
+            key="attack_attacker_fraction_pct",
+        )
+    )
+    honest_partition_fraction_pct = float(
+        controls_top[2].slider(
+            "Honest stake on branch A (%)",
+            min_value=10.0,
+            max_value=50.0,
+            value=50.0,
+            step=1.0,
+            key="attack_honest_partition_pct",
+            help="50/50 is the most adversarial partition for showing when equivocators can push both branches over the 2/3 line.",
+        )
+    )
+    epochs = int(
+        controls_top[3].slider(
+            "Attack horizon (epochs)",
+            min_value=1,
+            max_value=16,
+            value=8,
+            step=1,
+            key="attack_epochs",
+        )
+    )
+
+    controls_bottom = st.columns(3)
+    slash_detection_delay_epochs = int(
+        controls_bottom[0].slider(
+            "Detection delay (epochs)",
+            min_value=0,
+            max_value=8,
+            value=1,
+            step=1,
+            key="attack_detection_delay_epochs",
+        )
+    )
+    slash_detection_fraction_pct = float(
+        controls_bottom[1].slider(
+            "Attackers slashed per epoch (%)",
+            min_value=5.0,
+            max_value=100.0,
+            value=100.0,
+            step=5.0,
+            key="attack_detection_fraction_pct",
+        )
+    )
+    slash_fraction_of_balance_pct = float(
+        controls_bottom[2].slider(
+            "Burned balance per slashed validator (%)",
+            min_value=5.0,
+            max_value=100.0,
+            value=100.0,
+            step=5.0,
+            key="attack_burn_fraction_pct",
+        )
+    )
+
+    attack_snapshot = load_equivocation_snapshot(
+        {
+            "total_validators": total_validators,
+            "attacker_fraction": attacker_fraction_pct / 100.0,
+            "honest_partition_fraction": honest_partition_fraction_pct / 100.0,
+            "epochs": epochs,
+            "slash_detection_delay_epochs": slash_detection_delay_epochs,
+            "slash_detection_fraction_per_epoch": slash_detection_fraction_pct / 100.0,
+            "slash_fraction_of_balance": slash_fraction_of_balance_pct / 100.0,
+        }
+    )
+
+    summary = attack_snapshot.summary
+    if summary["initial_conflicting_finalization_possible"]:
+        st.warning(
+            "With these assumptions, both branches can clear the 2/3 finality threshold before slashing lands. "
+            "The accountable-safety question becomes how much slashable stake exists and how quickly detection removes it."
+        )
+    else:
+        st.info(
+            "With these assumptions, equivocators remain below the conflicting-finalization threshold. "
+            "The one-third accountable-safety bound still appears below so you can see the safety margin."
+        )
+
+    metrics = st.columns(6)
+    metrics[0].metric(
+        "Initial attackers",
+        f"{summary['initial_attacker_validators']:,.0f}",
+        f"{summary['initial_attacker_share_pct']:.1f}%",
+    )
+    metrics[1].metric(
+        "Accountable-safety bound",
+        f"{summary['accountable_safety_bound_validators']:,.0f}",
+        f"{summary['accountable_safety_bound_pct']:.1f}%",
+    )
+    metrics[2].metric(
+        "Conflict feasible",
+        "Yes" if summary["initial_conflicting_finalization_possible"] else "No",
+    )
+    metrics[3].metric(
+        "Min slashed to restore safety",
+        f"{summary['initial_minimum_slashed_to_restore_safety']:,.0f}",
+    )
+    metrics[4].metric(
+        "Cumulative slashed",
+        f"{summary['final_cumulative_slashed_validators']:,.0f}",
+    )
+    metrics[5].metric(
+        "Safety restored by epoch",
+        "Not restored"
+        if summary["first_restored_epoch"] is None
+        else f"{summary['first_restored_epoch']}",
+    )
+
+    frame = attack_snapshot.epoch_frame.copy()
+    sweep_frame = attack_snapshot.sweep_frame.copy()
+    accountable_bound_pct = float(summary["accountable_safety_bound_pct"])
+    finality_threshold_pct = attack_snapshot.config.finality_threshold * 100.0
+
+    vote_share_figure = go.Figure()
+    vote_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["branch_a_vote_share_pct_before_slash"],
+            mode="lines+markers",
+            name="Branch A vote share",
+            line=dict(color=ATTACK_COLORS["Branch A vote share"], width=2.5),
+        )
+    )
+    vote_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["branch_b_vote_share_pct_before_slash"],
+            mode="lines+markers",
+            name="Branch B vote share",
+            line=dict(color=ATTACK_COLORS["Branch B vote share"], width=2.5),
+        )
+    )
+    vote_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["branch_a_vote_share_pct_after_slash"],
+            mode="lines",
+            name="Branch A after slashing",
+            line=dict(color=ATTACK_COLORS["Branch A vote share"], width=2, dash="dot"),
+        )
+    )
+    vote_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["branch_b_vote_share_pct_after_slash"],
+            mode="lines",
+            name="Branch B after slashing",
+            line=dict(color=ATTACK_COLORS["Branch B vote share"], width=2, dash="dot"),
+        )
+    )
+    vote_share_figure.add_hline(
+        y=finality_threshold_pct,
+        line_dash="dash",
+        line_color="#f3f3f3",
+        annotation_text="2/3 finality threshold",
+        annotation_position="top left",
+    )
+    _configure_figure(
+        vote_share_figure,
+        title="Branch Vote Shares During Equivocation",
+        xaxis_title="Epoch",
+        yaxis_title="Vote share (%)",
+    )
+
+    attacker_share_figure = go.Figure()
+    attacker_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["attacker_share_pct_before_slash"],
+            mode="lines+markers",
+            name="Attacker share before slashing",
+            line=dict(color=ATTACK_COLORS["Attacker share before slashing"], width=2.5),
+        )
+    )
+    attacker_share_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["attacker_share_pct_after_slash"],
+            mode="lines+markers",
+            name="Attacker share after slashing",
+            line=dict(color=ATTACK_COLORS["Attacker share after slashing"], width=2.5),
+        )
+    )
+    attacker_share_figure.add_hline(
+        y=accountable_bound_pct,
+        line_dash="dash",
+        line_color="#f3f3f3",
+        annotation_text="Accountable-safety bound",
+        annotation_position="top left",
+    )
+    _configure_figure(
+        attacker_share_figure,
+        title="Attacker Share Versus The Accountable-Safety Bound",
+        xaxis_title="Epoch",
+        yaxis_title="Attacker share (%)",
+    )
+
+    slashing_figure = go.Figure()
+    slashing_figure.add_trace(
+        go.Bar(
+            x=frame["epoch"],
+            y=frame["slashed_this_epoch"],
+            name="Slashed this epoch",
+            marker_color=ATTACK_COLORS["Slashed this epoch"],
+            opacity=0.72,
+        )
+    )
+    slashing_figure.add_trace(
+        go.Scatter(
+            x=frame["epoch"],
+            y=frame["cumulative_slashed_validators"],
+            mode="lines+markers",
+            name="Cumulative slashed validators",
+            line=dict(color=ATTACK_COLORS["Cumulative slashed validators"], width=2.5),
+        )
+    )
+    _configure_figure(
+        slashing_figure,
+        title="Slashing Response Over Time",
+        xaxis_title="Epoch",
+        yaxis_title="Validators",
+    )
+
+    sweep_figure = go.Figure()
+    sweep_figure.add_trace(
+        go.Scatter(
+            x=sweep_frame["attacker_share_pct"],
+            y=sweep_frame["slashable_validators"],
+            mode="lines+markers",
+            name="Slashable attackers",
+            line=dict(color=ATTACK_COLORS["Slashable attackers"], width=2.5),
+        )
+    )
+    sweep_figure.add_trace(
+        go.Scatter(
+            x=sweep_frame["attacker_share_pct"],
+            y=sweep_frame["minimum_slashed_to_restore_safety"],
+            mode="lines+markers",
+            name="Minimum slashed to restore safety",
+            line=dict(
+                color=ATTACK_COLORS["Minimum slashed to restore safety"],
+                width=2.5,
+            ),
+        )
+    )
+    sweep_figure.add_vline(
+        x=summary["initial_attacker_share_pct"],
+        line_dash="dash",
+        line_color="#f3f3f3",
+        annotation_text="Current attacker share",
+        annotation_position="top left",
+    )
+    _configure_figure(
+        sweep_figure,
+        title="How Much Slashing Restores Safety?",
+        xaxis_title="Attacker share (%)",
+        yaxis_title="Validators",
+    )
+
+    top_left, top_right = st.columns(2)
+    top_left.plotly_chart(vote_share_figure, use_container_width=True)
+    top_right.plotly_chart(attacker_share_figure, use_container_width=True)
+
+    bottom_left, bottom_right = st.columns(2)
+    bottom_left.plotly_chart(slashing_figure, use_container_width=True)
+    bottom_right.plotly_chart(sweep_figure, use_container_width=True)
+
+    st.subheader("Epoch-by-Epoch Attack State")
+    st.dataframe(
+        frame,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "attacker_share_pct_before_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "branch_a_vote_share_pct_before_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "branch_b_vote_share_pct_before_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "accountable_safety_bound_pct": st.column_config.NumberColumn(format="%.2f%%"),
+            "attacker_share_pct_after_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "branch_a_vote_share_pct_after_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "branch_b_vote_share_pct_after_slash": st.column_config.NumberColumn(format="%.2f%%"),
+            "cumulative_burned_stake_eth": st.column_config.NumberColumn(format="%.2f ETH"),
+        },
+    )
+
+    with st.expander("Equivocation Modeling Notes", expanded=False):
+        for note in attack_snapshot.notes:
             st.write(f"- {note}")
 
 
@@ -1099,129 +1119,56 @@ def main() -> None:
     """Run the Streamlit dashboard."""
 
     st.set_page_config(
-        page_title="Hoodi Validator Activity Leaderboard",
+        page_title="Ethereum Staking Economics Lab",
         layout="wide",
     )
     render_theme()
-    (
-        db_path,
-        refresh_seconds,
-        history_epochs,
-        activity_lookback_epochs,
-        fee_rate,
-        slash_pass_through,
-        leaderboard_limit,
-        modeled_slashed_validators,
-        modeled_slash_fraction,
-        auto_refresh,
-        state_id,
-    ) = render_sidebar()
 
-    if auto_refresh and st_autorefresh is not None:
-        st_autorefresh(interval=refresh_seconds * 1_000, key="hoodi-validator-flow-feed")
-    elif auto_refresh:
-        st.sidebar.warning("Install `streamlit-autorefresh` to enable automatic refresh.")
+    if "dashboard_assumptions" not in st.session_state:
+        st.session_state.dashboard_assumptions = default_dashboard_assumptions()
 
-    try:
-        runtime_config = load_dashboard_runtime_config(
-            db_path=db_path,
-            history_epochs=history_epochs,
-            activity_lookback_epochs=activity_lookback_epochs,
-            leaderboard_limit=leaderboard_limit,
-            fee_rate=fee_rate,
-            slash_pass_through=slash_pass_through,
-            modeled_slashed_validators=modeled_slashed_validators,
-            modeled_slash_fraction=modeled_slash_fraction,
-            state_id=state_id,
-        )
-        with st.spinner("Refreshing Hoodi validator activity leaderboard..."):
-            snapshot = fetch_live_dashboard_snapshot(runtime_config)
-    except Exception as exc:
-        st.error(str(exc))
-        if "429" in str(exc) or "Too Many Requests" in str(exc) or "rate limit" in str(exc).lower():
-            st.info(
-                "The provider rate-limited this refresh. The dashboard now relies on cached slot history and gradual backfill, so waiting for the next 12-second refresh or increasing the refresh interval should let it recover."
-            )
-            return
-        st.info(
-            "Set valid Hoodi execution and Beacon endpoints in `.env`, then restart the dashboard. "
-            "The validator-flow leaderboard uses finalized beacon blocks plus current Beacon state from the configured provider."
-        )
-        return
+    if st.sidebar.button("Reset To Model Defaults", use_container_width=True):
+        st.session_state.dashboard_assumptions = default_dashboard_assumptions()
+        st.rerun()
 
-    st.title("Hoodi Validator Activity Leaderboard")
+    updated_assumptions = render_sidebar(st.session_state.dashboard_assumptions)
+    st.session_state.dashboard_assumptions = updated_assumptions
+
+    with st.spinner("Running staking-economics simulations..."):
+        snapshot = load_snapshot(asdict(st.session_state.dashboard_assumptions))
+
+    st.title("Ethereum Staking Economics Lab")
     st.caption(
-        "Top validators ranked by deposit and withdrawal activity over a finalized-slot window, with slot-level aggregate NAV observed directly and slot-level economics derived from consecutive state changes."
+        "A local simulation dashboard built from the CADLabs-style economic model experiments. "
     )
-    st.markdown(
-        """
-        <div class="pill">Alchemy-priority flow</div>
-        <div class="pill">Top validator basket</div>
-        <div class="pill">96-slot rolling window</div>
-        <div class="pill">Observed + scenario slashing</div>
-        """,
-        unsafe_allow_html=True,
-    )
+    
+    for warning in snapshot.warnings:
+        st.warning(warning)
 
-    top_row = st.columns(6)
-    top_row[0].metric("Current slot", snapshot.head_slot)
-    top_row[1].metric("Current epoch", snapshot.current_epoch)
-    top_row[2].metric("Tracked validators", len(snapshot.leaderboard_rows))
-    top_row[3].metric("Scenario NAV", f"{gwei_to_eth(snapshot.adjusted_pool_snapshot.nav_gwei):.6f} ETH")
-    top_row[4].metric("Derived slot rewards", f"{gwei_to_eth(snapshot.adjusted_pool_snapshot.net_rewards_gwei):.6f} ETH")
-    top_row[5].metric("Observed slash ops", snapshot.total_observed_slashings)
-
-    secondary_row = st.columns(6)
-    secondary_row[0].metric("Deposits", f"{gwei_to_eth(snapshot.total_deposit_gwei):.6f} ETH")
-    secondary_row[1].metric("Withdrawals", f"{gwei_to_eth(snapshot.total_withdrawal_gwei):.6f} ETH")
-    secondary_row[2].metric("Reward fee", f"{snapshot.pool.fee_rate:.0%}")
-    secondary_row[3].metric("Slash pass-through", f"{snapshot.slash_settings.slash_pass_through:.0%}")
-    secondary_row[4].metric("Modeled slashed vals", snapshot.slash_settings.modeled_slashed_validators)
-    secondary_row[5].metric("Modeled slash fraction", f"{snapshot.slash_settings.modeled_slash_fraction:.2%}")
-
-    st.markdown(
-        f"""
-        <p class="muted-note">
-        Refreshed at {snapshot.refreshed_at.isoformat()} | Head slot {snapshot.head_slot} | Finalized slot {snapshot.finalized_slot} | History window slots {snapshot.history_window_start_slot}-{snapshot.history_window_end_slot} | Activity window slots {snapshot.activity_window_start_slot}-{snapshot.activity_window_end_slot}
-        </p>
-        """,
-        unsafe_allow_html=True,
+    overview_tab, time_tab, phase_tab, environment_tab, attack_tab = st.tabs(
+        [
+            "Overview",
+            "Time Series",
+            "Phase Space",
+            "Validator Environments",
+            "Equivocation Attack",
+        ]
     )
 
-    live_tab, cadlabs_tab = st.tabs(
-        ["Validator Flow Feed", "CADLabs-Style Yield Lab"]
-    )
+    with overview_tab:
+        render_overview_tab(snapshot)
 
-    with live_tab:
-        render_pool_charts(snapshot)
+    with time_tab:
+        render_time_series_tab(snapshot)
 
-        st.subheader("Top Validator Activity")
-        leaderboard_frame = build_leaderboard_frame(snapshot)
-        st.dataframe(
-            leaderboard_frame,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "balance_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "effective_balance_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "deposit_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "withdrawal_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "total_activity_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "net_flow_eth": st.column_config.NumberColumn(format="%.6f ETH"),
-                "slot_delta_eth": st.column_config.NumberColumn("Slot delta", format="%.9f ETH"),
-            },
-        )
+    with phase_tab:
+        render_phase_space_tab(snapshot)
 
-        render_action_cards(snapshot)
-        render_machine_readable_snapshot(snapshot)
-        render_methodology(snapshot)
+    with environment_tab:
+        render_validator_environment_tab(snapshot)
 
-        with st.expander("Notes And Limitations", expanded=False):
-            for note in snapshot.notes:
-                st.write(f"- {note}")
-
-    with cadlabs_tab:
-        render_cadlabs_replication_tab(snapshot)
+    with attack_tab:
+        render_equivocation_attack_tab(snapshot)
 
 
 if __name__ == "__main__":

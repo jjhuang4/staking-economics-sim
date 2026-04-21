@@ -1,0 +1,20 @@
+# IMPORTANT: Requires Python version <= 3.10 to work (due to pandas 1.5.3 dependency)
+# all Python versions >= 2.0.0 will no longer support this older version of pandas
+
+# To address backwards compatibility in dependencies (radcad points to pandas 1.5.3 only)
+# setuptools==69.5.1
+# pandas<2.0.0
+pandas<2.0.0
+
+# 1. Pull in the submodule's core requirements
+# -r ../ethereum-economic-model/requirements.txt
+-r ethereum-economic-model/requirements.txt
+
+# 2. Add your custom project needs
+fastapi            # For your frontend
+streamlit
+plotly>=5.20,<6
+python-dotenv      # For key management
+
+# 3. Override specific versions if necessary (with caution)
+# notebook<7
